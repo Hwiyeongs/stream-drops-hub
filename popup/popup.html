@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stream Drops Hub - 수령 허브</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="brand">
+        <div class="logo-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 12 20 22 4 22 4 12"></polyline>
+            <rect x="2" y="7" width="20" height="5"></rect>
+            <line x1="12" y1="22" x2="12" y2="7"></line>
+            <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"></path>
+            <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1 class="title">Drops 수령 허브</h1>
+          <span id="lastUpdated" class="subtitle">동기화 중...</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="claimAllBtn" class="btn-claim-all hidden" title="현재 목록의 모든 보상 수령">전체 수령</button>
+        <button id="refreshBtn" class="icon-btn" title="새로고침">
+          <svg id="refreshIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="all">전체 <span class="tab-badge" id="badgeAll">0</span></button>
+      <button class="tab-btn" data-tab="chzzk"><span class="dot dot-chzzk"></span>치지직 <span class="tab-badge" id="badgeChzzk">0</span></button>
+      <button class="tab-btn" data-tab="soop"><span class="dot dot-soop"></span>SOOP <span class="tab-badge" id="badgeSoop">0</span></button>
+      <button class="tab-btn" data-tab="twitch"><span class="dot dot-twitch"></span>트위치 <span class="tab-badge" id="badgeTwitch">0</span></button>
+      <button class="tab-btn" data-tab="log"><span class="dot dot-log"></span>기록 <span class="tab-badge" id="badgeLog">0</span></button>
+      <button class="tab-btn tab-btn-icon" data-tab="settings" title="설정">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </nav>
+
+    <!-- Platform Login Status Alerts Banner -->
+    <div id="loginAlertsContainer" class="alerts-container"></div>
+
+    <!-- Main Content Area -->
+    <main class="content">
+      <!-- Drops List View -->
+      <div id="dropsListView" class="view-panel active">
+        <div id="dropsContainer" class="drops-container">
+          <!-- Drops cards injected dynamically -->
+        </div>
+
+        <!-- Empty State -->
+        <div id="emptyState" class="empty-state hidden">
+          <div class="empty-icon">🎉</div>
+          <h3>수령 대기 중인 드롭스가 없습니다</h3>
+          <p>이미 획득 완료되었거나 유효기간이 지난 보상은 표시되지 않습니다.</p>
+        </div>
+      </div>
+
+      <!-- Log / History View -->
+      <div id="logListView" class="view-panel hidden">
+        <div id="logContainer" class="drops-container">
+          <!-- Handled drops cards injected dynamically -->
+        </div>
+
+        <!-- Log Empty State -->
+        <div id="logEmptyState" class="empty-state hidden">
+          <div class="empty-icon">📋</div>
+          <h3>기록된 드롭스가 없습니다</h3>
+          <p>수령하거나 코드를 복사한 보상이 여기에 보관됩니다.<br><span style="font-size: 11px; color: var(--text-muted);">※ 유효기간이 지난 보상은 자동으로 정리됩니다.</span></p>
+        </div>
+      </div>
+
+      <!-- Settings View -->
+      <div id="settingsView" class="view-panel hidden">
+        <div class="settings-group">
+          <h3 class="settings-group-title">자동화 및 알림</h3>
+          
+          <div class="setting-item">
+            <div class="setting-info">
+              <span class="setting-title">새 드롭스 알림</span>
+              <span class="setting-desc">시청 시간 100% 달성 시 브라우저 알림</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" class="toggle-switch" id="settingNotify">
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <span class="setting-title">자동 수령 (Auto-Claim)</span>
+              <span class="setting-desc">달성된 드롭스 백그라운드 자동 수령</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" class="toggle-switch" id="settingAutoClaim">
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <span class="setting-title">확인 주기</span>
+              <span class="setting-desc">백그라운드 진행률 동기화 간격</span>
+            </div>
+            <select id="settingInterval" class="select-input">
+              <option value="5">5분</option>
+              <option value="10">10분</option>
+              <option value="15">15분</option>
+              <option value="30">30분</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <h3 class="settings-group-title">이터널리턴 드롭스 방송</h3>
+          <div class="setting-item">
+            <div class="setting-info"><label class="setting-title" for="settingLiveMonitor">방송 감지 및 알림</label><span class="setting-desc">치지직·SOOP 드롭스 표시 방송을 1분마다 확인</span></div>
+            <label class="switch"><input type="checkbox" class="toggle-switch" id="settingLiveMonitor"><span class="slider"></span></label>
+          </div>
+          <div class="setting-item">
+            <div class="setting-info"><label class="setting-title" for="settingLiveAutoOpen">자동으로 방송 열기</label><span class="setting-desc">플랫폼당 한 탭 · 현재 작업 화면 유지</span></div>
+            <label class="switch"><input type="checkbox" class="toggle-switch" id="settingLiveAutoOpen"><span class="slider"></span></label>
+          </div>
+          <p class="setting-desc">브라우저가 실행 중일 때 동작합니다. 켜면 현재 방송도 확인하며, 치지직은 캠페인별, SOOP은 카테고리별 하루 한 번 알림합니다. 영상 재생은 직접 눌러야 할 수 있습니다.</p>
+          <p id="liveMonitorStatus" class="setting-desc" role="status" style="white-space: pre-line; overflow-wrap: anywhere"></p>
+        </div>
+
+        <div class="settings-group">
+          <h3 class="settings-group-title">공식 보관함 바로가기</h3>
+          <div class="quick-links">
+            <a href="https://game.naver.com/profile#drops" target="_blank" class="quick-link chzzk-btn">
+              <span>치지직 보관함</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+            </a>
+            <a href="https://drops.sooplive.com/inventory" target="_blank" class="quick-link soop-btn">
+              <span>SOOP 보관함</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+            </a>
+            <a href="https://www.twitch.tv/drops/inventory" target="_blank" class="quick-link twitch-btn">
+              <span>트위치 인벤토리</span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+            </a>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Footer Summary Bar -->
+    <footer class="footer">
+      <div class="status-summary">
+        <span id="summaryText">수령 가능 0개</span>
+      </div>
+      <div class="version-tag" id="versionTag"></div>
+    </footer>
+
+    <!-- Toast Notification Container -->
+    <div id="toastContainer" class="toast-container"></div>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
+
