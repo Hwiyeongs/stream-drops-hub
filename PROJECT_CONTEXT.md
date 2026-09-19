@@ -17,3 +17,5 @@
 ## 검증
 tests/regression.test.js 및 README.md 참고. 모의 데이터와 분리된 Chromium 프로필로 확인했다. 실계정 로그인, 플랫폼의 현재 비공개 API 규격, 실제 보상 지급은 검증하지 않았다. API 규격/보안 검증 변경 시 보관함에서 직접 확인해야 할 수 있다.
 
+## 배포 및 저장소
+- GitHub 저장소: https://github.com/Hwiyeongs/stream-drops-hub (Public)
