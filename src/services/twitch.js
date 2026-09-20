@@ -1,4 +1,4 @@
-import { campaignDisplayDate } from './campaign-date.js';
+import { twitchDisplayDate } from './campaign-date.js';
 /**
  * Twitch Drops Integration Service (Pending Claims Only)
  * Official Inventory Web: https://www.twitch.tv/drops/inventory
@@ -7,6 +7,7 @@ import { campaignDisplayDate } from './campaign-date.js';
 
 import { fetchWithTimeout } from './fetch-helper.js';
 import { parseExpTimestamp } from './storage.js';
+import { buildCapturedTwitchRequestHeaders, clearCapturedTwitchGqlHeaders, getCapturedTwitchGqlHeaders, waitForCapturedTwitchGqlHeaders } from './twitch-headers.js';
 
 const TWITCH_GQL_URL = 'https://gql.twitch.tv/gql';
 const TWITCH_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
@@ -14,12 +15,6 @@ const TWITCH_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 // Twitch official GQL persisted query hash for Inventory
 const INVENTORY_QUERY_HASH = '8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404';
 
-// Twitch official GQL persisted query hashes for ClaimDrop
-const CLAIM_DROP_QUERY_HASH = '2f884fa187b8fadb2a49db0adc033e636f7b6aaee6e76de1e2bba9a7baf0daf6';
-const CLAIM_DROP_QUERY_HASH_FALLBACK = 'a455deea71bdc9015b78eb49f4acfbce8baa7ccbedd28e549bb025bd0f751930';
-
-let cachedIntegrityToken = null;
-let integrityTokenExpiry = 0;
 
 function cleanToken(token) {
   if (!token) return null;
@@ -30,141 +25,6 @@ function cleanToken(token) {
   return t;
 }
 
-export async function getTwitchDeviceId() {
-  try {
-    const urls = ['https://www.twitch.tv', 'https://twitch.tv', 'https://passport.twitch.tv'];
-    for (const u of urls) {
-      const cookie = await chrome.cookies.get({ url: u, name: 'unique_id' });
-      if (cookie?.value) return cleanToken(cookie.value);
-    }
-    const all = await chrome.cookies.getAll({ name: 'unique_id' });
-    const match = all.find((c) => c.domain && c.domain.includes('twitch.tv'));
-    if (match?.value) return cleanToken(match.value);
-  } catch (err) {
-    console.warn('[Twitch] Failed to get unique_id cookie:', err);
-  }
-  return null;
-}
-
-export async function getTwitchIntegrityToken(authToken, deviceId) {
-  const now = Date.now();
-  if (cachedIntegrityToken && integrityTokenExpiry > now + 60000) {
-    return cachedIntegrityToken;
-  }
-
-  try {
-    const headers = {
-      'Client-Id': TWITCH_CLIENT_ID,
-      'Content-Type': 'application/json',
-    };
-    if (authToken) {
-      headers['Authorization'] = `OAuth ${authToken}`;
-    }
-    if (deviceId) {
-      headers['X-Device-Id'] = deviceId;
-    }
-
-    const res = await fetchWithTimeout(
-      'https://gql.twitch.tv/integrity',
-      {
-        method: 'POST',
-        credentials: 'include',
-        headers,
-        body: JSON.stringify({}),
-      },
-      6000
-    );
-
-    if (res.ok) {
-      const data = await res.json();
-      if (data?.token) {
-        cachedIntegrityToken = data.token;
-        integrityTokenExpiry = data.expiration || now + 12 * 60 * 60 * 1000;
-        return cachedIntegrityToken;
-      }
-    }
-  } catch (err) {
-    console.warn('[Twitch] Failed to acquire integrity token:', err);
-  }
-
-  return null;
-}
-
-/** Send the selected instance ID from an existing Twitch page. */
-async function tryClaimViaTwitchTab(dropInstanceId, authToken) {
-  try {
-    if (!chrome.tabs || !chrome.scripting) return null;
-    const tabs = await chrome.tabs.query({ url: '*://*.twitch.tv/*' });
-    if (!tabs || tabs.length === 0) return null;
-
-    const targetTab = tabs.find((t) => t.url && new URL(t.url).hostname === 'www.twitch.tv');
-    if (!targetTab?.id) return null;
-
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: targetTab.id },
-      world: 'MAIN',
-      func: async (instanceId, passedToken) => {
-        try {
-          if (!passedToken) return { success: false, error: 'No auth-token' };
-
-          // Execute the exact-ID mutation in the authenticated page context.
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 8000);
-          let json;
-          try {
-          const res = await window.fetch('https://gql.twitch.tv/gql', {
-            method: 'POST',
-            signal: controller.signal,
-            credentials: 'include',
-            headers: {
-              'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
-              'Authorization': `OAuth ${passedToken}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              operationName: 'DropsPage_ClaimDropRewards',
-              query: `mutation DropsPage_ClaimDropRewards($input: ClaimDropRewardsInput!) {
-                claimDropRewards(input: $input) {
-                  status
-                }
-              }`,
-              variables: {
-                input: {
-                  dropInstanceID: instanceId,
-                },
-              },
-            }),
-          });
-
-          if (!res.ok) return { success: false, error: `HTTP ${res.status}` };
-          json = await res.json();
-          } finally { clearTimeout(timer); }
-          if (json?.errors?.length) return { success: false, error: json.errors[0].message };
-          const status = json?.data?.claimDropRewards?.status;
-          if (
-            status === 'ELIGIBLE_FOR_ALL' ||
-            status === 'DROP_INSTANCE_ALREADY_CLAIMED' ||
-            status === 'SUCCESS'
-          ) {
-            return { success: true, status };
-          }
-          return { success: false, error: 'Unknown response' };
-        } catch (e) {
-          return { success: false, error: e.message };
-        }
-      },
-      args: [dropInstanceId, authToken],
-    });
-
-    const execResult = results?.[0]?.result;
-    if (execResult && execResult.success) {
-      return { success: true, status: execResult.status };
-    }
-  } catch (err) {
-    console.warn('[Twitch] In-tab claim attempt failed:', err);
-  }
-  return null;
-}
 
 export async function getTwitchAuthToken() {
   try {
@@ -294,6 +154,7 @@ export async function fetchTwitchDrops() {
               id
               name
               status
+              startAt
               endAt
               game {
                 id
@@ -303,6 +164,8 @@ export async function fetchTwitchDrops() {
               timeBasedDrops {
                 id
                 name
+                startAt
+                endAt
                 requiredMinutesWatched
                 benefitEdges {
                   benefit {
@@ -405,7 +268,7 @@ export async function fetchTwitchDrops() {
         platformName: '트위치',
         gameTitle,
         campaignName: campaign.name,
-        campaignDate: campaignDisplayDate(campaign.name, campaign.endAt),
+        campaignDate: twitchDisplayDate(campaign.name, timeDrop.startAt, campaign.startAt, campaign.endAt),
         rewardName,
         rewardImageUrl,
         status: 'CLAIMABLE',
@@ -424,123 +287,114 @@ export async function fetchTwitchDrops() {
   };
 }
 
-// Claim exact instances only. No DOM guessing or unsolicited inventory clicks.
-export async function claimTwitchDrop(dropInstanceId) {
-  if (typeof dropInstanceId !== 'string' || !dropInstanceId.trim()) throw new Error('수령 가능한 보상 ID가 없습니다. 보관함을 새로고침해 주세요.');
-  const authToken = await getTwitchAuthToken();
-  if (!authToken) throw new Error('트위치 로그인이 필요합니다.');
-  const tabClaim = await tryClaimViaTwitchTab(dropInstanceId, authToken);
-  if (tabClaim?.success) return tabClaim;
-  // =========================================================================
-  // Direct API fallback with the current device/session context
-  // =========================================================================
-  const deviceId = await getTwitchDeviceId();
-  let integrityToken = await getTwitchIntegrityToken(authToken, deviceId);
-
-  const baseHeaders = {
-    'Client-Id': TWITCH_CLIENT_ID,
-    'Authorization': `OAuth ${authToken}`,
-    'Content-Type': 'application/json',
-  };
-  if (deviceId) {
-    baseHeaders['X-Device-Id'] = deviceId;
-  }
-  if (integrityToken) {
-    baseHeaders['Client-Integrity'] = integrityToken;
+async function ensureTwitchClaimHeaders({ forceFresh = false } = {}) {
+  if (forceFresh) await clearCapturedTwitchGqlHeaders();
+  else {
+    const existing = await getCapturedTwitchGqlHeaders();
+    if (existing) return { capture: existing, temporaryTabId: null };
   }
 
-  async function sendClaimGQL(hash, rawQuery = null) {
-    const payload = {
-      operationName: 'DropsPage_ClaimDropRewards',
-      variables: {
-        input: {
-          dropInstanceID: dropInstanceId,
-        },
-      },
-    };
-    if (rawQuery) {
-      payload.query = rawQuery;
-    } else {
-      payload.extensions = {
-        persistedQuery: {
-          version: 1,
-          sha256Hash: hash,
-        },
-      };
+  const startedAt = Date.now();
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({ url: '*://*.twitch.tv/*' }); } catch {}
+
+  // Give an already-open Twitch page a moment to emit one of its normal GQL requests.
+  if (!forceFresh && tabs.length) {
+    const passive = await waitForCapturedTwitchGqlHeaders({ newerThan: startedAt - 1, timeoutMs: 2000 });
+    if (passive) return { capture: passive, temporaryTabId: null };
+  }
+
+  let inventoryTab = tabs.find(tab => tab?.url?.includes('/drops/inventory')) || null;
+  let temporaryTabId = null;
+  let captureStart = Date.now();
+
+  if (!inventoryTab?.id && chrome.tabs?.create) {
+    inventoryTab = await chrome.tabs.create({ url: 'https://www.twitch.tv/drops/inventory', active: false });
+    temporaryTabId = inventoryTab?.id ?? null;
+    if (temporaryTabId && chrome.tabs.update) {
+      try { await chrome.tabs.update(temporaryTabId, { autoDiscardable: false }); } catch {}
     }
-
-    return await fetchWithTimeout(
-      TWITCH_GQL_URL,
-      {
-        method: 'POST',
-        credentials: 'include',
-        headers: baseHeaders,
-        body: JSON.stringify(payload),
-      },
-      8000
-    );
+  } else if (inventoryTab?.id && chrome.tabs?.reload) {
+    try { await chrome.tabs.reload(inventoryTab.id); } catch {}
   }
 
-  // Attempt A: latest persisted query hash with integrity token
-  let res = await sendClaimGQL(CLAIM_DROP_QUERY_HASH);
+  let capture = await waitForCapturedTwitchGqlHeaders({ newerThan: captureStart - 1, timeoutMs: 15000 });
+  if (!capture && inventoryTab?.id && chrome.tabs?.reload) {
+    captureStart = Date.now();
+    try { await chrome.tabs.reload(inventoryTab.id); } catch {}
+    capture = await waitForCapturedTwitchGqlHeaders({ newerThan: captureStart - 1, timeoutMs: 12000 });
+  }
+
+  if (!capture) {
+    if (temporaryTabId && chrome.tabs?.remove) {
+      try { await chrome.tabs.remove(temporaryTabId); } catch {}
+    }
+    throw new Error('트위치 페이지의 보안 헤더를 가져오지 못했습니다. 트위치 보관함이 정상 로드된 상태에서 다시 시도해 주세요.');
+  }
+  return { capture, temporaryTabId };
+}
+
+async function sendCapturedTwitchClaim(dropInstanceId, capture) {
+  const query = `
+    mutation DropsPage_ClaimDropRewards($input: ClaimDropRewardsInput!) {
+      claimDropRewards(input: $input) { status }
+    }
+  `;
+  const response = await fetchWithTimeout(
+    TWITCH_GQL_URL,
+    {
+      method: 'POST',
+      headers: buildCapturedTwitchRequestHeaders(capture),
+      body: JSON.stringify({
+        operationName: 'DropsPage_ClaimDropRewards',
+        query,
+        variables: { input: { dropInstanceID: dropInstanceId } },
+      }),
+    },
+    8000
+  );
   let json = null;
-  try {
-    json = await res.json();
-  } catch (e) {}
+  try { json = await response.json(); } catch {}
+  return { response, json };
+}
 
-  // Attempt B: If integrity error, clear cached token, acquire fresh one and retry once
-  if (json?.errors?.some((e) => e.message && e.message.toLowerCase().includes('integrity'))) {
-    cachedIntegrityToken = null;
-    integrityToken = await getTwitchIntegrityToken(authToken, deviceId);
-    if (integrityToken) {
-      baseHeaders['Client-Integrity'] = integrityToken;
-      res = await sendClaimGQL(CLAIM_DROP_QUERY_HASH);
-      try {
-        json = await res.json();
-      } catch (e) {}
+// Claim exact instances only. The integrity/session headers are borrowed from Twitch's own page request.
+export async function claimTwitchDrop(dropInstanceId) {
+  if (typeof dropInstanceId !== 'string' || !dropInstanceId.trim()) {
+    throw new Error('수령 가능한 보상 ID가 없습니다. 보관함을 새로고침해 주세요.');
+  }
+
+  const temporaryTabs = new Set();
+  try {
+    let session = await ensureTwitchClaimHeaders();
+    if (session.temporaryTabId) temporaryTabs.add(session.temporaryTabId);
+    let { response, json } = await sendCapturedTwitchClaim(dropInstanceId, session.capture);
+
+    const hasIntegrityError = payload => payload?.errors?.some(error => /integrity/i.test(error?.message || ''));
+    if (hasIntegrityError(json)) {
+      // The page renews Client-Integrity itself. Force a newly observed page request and retry once.
+      session = await ensureTwitchClaimHeaders({ forceFresh: true });
+      if (session.temporaryTabId) temporaryTabs.add(session.temporaryTabId);
+      ({ response, json } = await sendCapturedTwitchClaim(dropInstanceId, session.capture));
+    }
+
+    if (!response.ok) throw new Error(`수령 요청 실패 (HTTP ${response.status})`);
+    if (json?.errors?.length) {
+      const message = json.errors.map(error => error?.message || '수령 요청 실패').join(' | ');
+      throw new Error(/integrity/i.test(message)
+        ? `트위치 보안 토큰을 새로 가져왔지만 서버가 거부했습니다: ${message}`
+        : message);
+    }
+
+    const claimStatus = json?.data?.claimDropRewards?.status;
+    if (['ELIGIBLE_FOR_ALL', 'DROP_INSTANCE_ALREADY_CLAIMED', 'SUCCESS'].includes(claimStatus)) {
+      return { success: true, status: claimStatus };
+    }
+    throw new Error(`트위치 수령을 확인하지 못했습니다 (${claimStatus || '응답 없음'}). 보관함에서 확인해 주세요.`);
+  } finally {
+    for (const tabId of temporaryTabs) {
+      if (!chrome.tabs?.remove) continue;
+      try { await chrome.tabs.remove(tabId); } catch {}
     }
   }
-
-  // Attempt C: fallback query hash if PersistedQueryNotFound
-  if (json?.errors?.some((e) => e.message && e.message.includes('PersistedQueryNotFound'))) {
-    res = await sendClaimGQL(CLAIM_DROP_QUERY_HASH_FALLBACK);
-    try {
-      json = await res.json();
-    } catch (e) {}
-  }
-
-  // Attempt D: raw GraphQL mutation fallback
-  if (!json || json.errors?.some((e) => e.message && e.message.includes('PersistedQueryNotFound'))) {
-    const rawMutation = `
-      mutation DropsPage_ClaimDropRewards($input: ClaimDropRewardsInput!) {
-        claimDropRewards(input: $input) {
-          status
-        }
-      }
-    `;
-    res = await sendClaimGQL(null, rawMutation);
-    try {
-      json = await res.json();
-    } catch (e) {}
-  }
-
-  if (!res.ok) {
-    throw new Error(`수령 요청 실패 (HTTP ${res.status})`);
-  }
-
-  if (json?.errors?.length) {
-    const message = json.errors[0].message || '수령 요청 실패';
-    throw new Error(/integrity/i.test(message) ? '트위치 보안 검증이 필요합니다. 보관함 링크에서 직접 확인해 주세요.' : message);
-  }
-  const claimStatus = json?.data?.claimDropRewards?.status;
-
-  if (
-    claimStatus === 'ELIGIBLE_FOR_ALL' ||
-    claimStatus === 'DROP_INSTANCE_ALREADY_CLAIMED' ||
-    claimStatus === 'SUCCESS'
-  ) {
-    return { success: true, status: claimStatus };
-  }
-
-  throw new Error(`트위치 수령을 확인하지 못했습니다 (${claimStatus || '응답 없음'}). 보관함에서 확인해 주세요.`);
 }

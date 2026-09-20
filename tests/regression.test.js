@@ -2,22 +2,30 @@ import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 const APP_VERSION = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url))).version;
-let data = {}, alarms = new Map(), notifications = [], mutations = [], mode = 'success';
+let data = {}, sessionData = {}, alarms = new Map(), notifications = [], mutations = [], mode = 'success';
 let campaigns = [], soopAvailable = [], soopAcquired = [], chzzkClaims = [], soopHtml = false;
 const listeners = {};
 const event = name => ({ addListener(fn) { listeners[name] = fn; } });
 globalThis.chrome = {
   runtime: { id: 'test', getManifest: () => ({ version: APP_VERSION }), getURL: p => 'chrome-extension://test/' + p, onInstalled: event('installed'), onStartup: event('startup'), onMessage: event('message') },
-  storage: { local: {
-    async get(keys) { if (keys == null) return structuredClone(data); if (typeof keys === 'string') keys = [keys]; return Object.fromEntries(keys.filter(k => k in data).map(k => [k, structuredClone(data[k])])); },
-    async set(obj) { Object.assign(data, structuredClone(obj)); },
-    async remove(keys) { for (const key of typeof keys === 'string' ? [keys] : keys) delete data[key]; },
-  } },
+  storage: {
+    local: {
+      async get(keys) { if (keys == null) return structuredClone(data); if (typeof keys === 'string') keys = [keys]; return Object.fromEntries(keys.filter(k => k in data).map(k => [k, structuredClone(data[k])])); },
+      async set(obj) { Object.assign(data, structuredClone(obj)); },
+      async remove(keys) { for (const key of typeof keys === 'string' ? [keys] : keys) delete data[key]; },
+    },
+    session: {
+      async get(keys) { if (keys == null) return structuredClone(sessionData); if (typeof keys === 'string') keys = [keys]; return Object.fromEntries(keys.filter(k => k in sessionData).map(k => [k, structuredClone(sessionData[k])])); },
+      async set(obj) { Object.assign(sessionData, structuredClone(obj)); },
+      async remove(keys) { for (const key of typeof keys === 'string' ? [keys] : keys) delete sessionData[key]; },
+    },
+  },
   alarms: { async get(name) { return alarms.get(name); }, async create(name, value) { alarms.set(name, value); }, async clear(name) { return alarms.delete(name); }, onAlarm: event('alarm') },
   notifications: { onClicked: event('notificationClicked'), async create(id, entry) { notifications.push({ id, ...entry }); return id; } },
   cookies: { async get({ name }) { return name === 'auth-token' ? { value: 'mock-token' } : null; }, async getAll() { return []; } },
   tabs: { async query() { return []; } },
   scripting: { async executeScript() { throw new Error('Unexpected script'); } },
+  webRequest: { onSendHeaders: event('webRequestSendHeaders') },
 };
 const json = body => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
 const mockFetch = async (url, options = {}) => {
@@ -43,13 +51,17 @@ globalThis.fetch = mockFetch;
 const storage = await import('../src/services/storage.js');
 const { fetchAllDrops, claimUnifiedDrop, isActiveDrop } = await import('../src/services/aggregator.js');
 const { fetchTwitchDrops, claimTwitchDrop, decodeInventoryResponse } = await import('../src/services/twitch.js');
+const twitchHeaders = await import('../src/services/twitch-headers.js');
 const { fetchSoopDrops, claimSoopDrop, parseItemDateValue } = await import('../src/services/soop.js');
 const { fetchChzzkDrops } = await import('../src/services/chzzk.js');
 const { fetchWithTimeout } = await import('../src/services/fetch-helper.js');
 const worker = await import('../background/service-worker.js');
 await worker.enqueue(async () => {});
-beforeEach(() => {
+beforeEach(async () => {
   data = { appVersion: APP_VERSION, itemStorageMigrated: true };
+  sessionData = {};
+  await twitchHeaders.clearCapturedTwitchGqlHeaders();
+  sessionData = { twitchGqlHeaders: { headers: { Authorization: 'OAuth mock-token', 'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko', 'Client-Integrity': 'mock-integrity', 'Client-Session-Id': 'mock-session', 'Client-Version': 'mock-version', 'Device-ID': 'mock-device' }, at: Date.now(), tabId: 12 } };
   alarms = new Map(); notifications = []; mutations = []; mode = 'success';
   campaigns = []; soopAvailable = []; soopAcquired = []; chzzkClaims = []; soopHtml = false;
   globalThis.fetch = mockFetch;
@@ -118,14 +130,78 @@ test('Twitch missing IDs and unknown statuses never succeed', async () => {
   mode = 'unknown'; await assert.rejects(claimTwitchDrop('instance-B'), /NOT_ELIGIBLE/);
   assert.deepEqual(mutations, ['instance-B']);
 });
-test('Twitch in-page request uses selected instance ID and checks HTTP + response', async () => {
-  chrome.tabs.query = async () => [{ id: 12, url: 'https://www.twitch.tv/drops/inventory' }];
-  chrome.scripting.executeScript = async options => {
-    assert.deepEqual(options.args, ['instance-B', 'mock-token']);
-    globalThis.window = { fetch: mockFetch };
-    return [{ result: await options.func(...options.args) }];
+test('Twitch claim reuses integrity and session headers captured from a real Twitch page', async () => {
+  let claimHeaders = null;
+  globalThis.fetch = async (url, options = {}) => {
+    if (url.endsWith('/gql')) {
+      const body = JSON.parse(options.body);
+      if (body.operationName === 'Inventory') return json({ data: { currentUser: { inventory: { dropCampaignsInProgress: campaigns } } } });
+      claimHeaders = options.headers;
+      mutations.push(body.variables.input.dropInstanceID);
+      return json({ data: { claimDropRewards: { status: 'SUCCESS' } } });
+    }
+    return mockFetch(url, options);
   };
   assert.equal((await claimTwitchDrop('instance-B')).success, true);
+  assert.equal(claimHeaders['Client-Integrity'], 'mock-integrity');
+  assert.equal(claimHeaders['Client-Session-Id'], 'mock-session');
+  assert.equal(claimHeaders['Client-Version'], 'mock-version');
+  assert.equal(claimHeaders['Device-ID'], 'mock-device');
+  assert.equal(claimHeaders['Content-Type'], 'application/json');
+  assert.deepEqual(mutations, ['instance-B']);
+});
+
+test('Twitch webRequest listener captures only usable headers from a real Twitch tab', async () => {
+  await twitchHeaders.clearCapturedTwitchGqlHeaders();
+  listeners.webRequestSendHeaders({
+    method: 'POST',
+    tabId: 21,
+    requestHeaders: [
+      { name: 'Authorization', value: 'OAuth fresh-auth' },
+      { name: 'Client-Id', value: 'client' },
+      { name: 'Client-Integrity', value: 'fresh-integrity' },
+      { name: 'Client-Session-Id', value: 'fresh-session' },
+      { name: 'Ignored-Header', value: 'nope' },
+    ],
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const captured = await twitchHeaders.getCapturedTwitchGqlHeaders();
+  assert.equal(captured.headers['Client-Integrity'], 'fresh-integrity');
+  assert.equal(captured.headers['Client-Session-Id'], 'fresh-session');
+  assert.equal(captured.headers['Ignored-Header'], undefined);
+});
+
+test('Twitch refreshes captured page headers after an integrity rejection and retries once', async () => {
+  let gqlCalls = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    if (!url.endsWith('/gql')) return mockFetch(url, options);
+    const body = JSON.parse(options.body);
+    gqlCalls++;
+    if (gqlCalls === 1) {
+      assert.equal(options.headers['Client-Integrity'], 'mock-integrity');
+      return json({ errors: [{ message: 'failed integrity check' }] });
+    }
+    assert.equal(options.headers['Client-Integrity'], 'fresh-integrity');
+    mutations.push(body.variables.input.dropInstanceID);
+    return json({ data: { claimDropRewards: { status: 'SUCCESS' } } });
+  };
+  chrome.tabs.query = async () => [{ id: 12, url: 'https://www.twitch.tv/drops/inventory' }];
+  chrome.tabs.reload = async () => {
+    listeners.webRequestSendHeaders({
+      method: 'POST',
+      tabId: 12,
+      requestHeaders: [
+        { name: 'Authorization', value: 'OAuth mock-token' },
+        { name: 'Client-Id', value: 'client' },
+        { name: 'Client-Integrity', value: 'fresh-integrity' },
+        { name: 'Client-Session-Id', value: 'fresh-session' },
+        { name: 'Client-Version', value: 'fresh-version' },
+      ],
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+  assert.equal((await claimTwitchDrop('instance-B')).success, true);
+  assert.equal(gqlCalls, 2);
   assert.deepEqual(mutations, ['instance-B']);
 });
 test('Twitch needs exact completed watch duration and uses same expiry in popup', async () => {
@@ -281,4 +357,14 @@ test('Twitch inventory retains campaign display date separately from acquisition
  const result=await fetchTwitchDrops();
  assert.equal(result.drops[0].campaignDate,'2099-09-17');
  assert.equal(result.drops[0].acquiredAt,undefined);
+});
+
+
+test('Twitch display date falls back to individual drop startAt, then campaign startAt',async()=>{
+ campaigns=[{...campaign(),name:'Drops Token',startAt:'2099-09-18T15:00:00Z',timeBasedDrops:[{...campaign().timeBasedDrops[0],startAt:'2099-09-19T15:30:00Z'}]}];
+ let result=await fetchTwitchDrops();
+ assert.equal(result.drops[0].campaignDate,'2099-09-20');
+ campaigns=[{...campaign(),name:'Drops Token',startAt:'2099-09-18T15:00:00Z'}];
+ result=await fetchTwitchDrops();
+ assert.equal(result.drops[0].campaignDate,'2099-09-19');
 });

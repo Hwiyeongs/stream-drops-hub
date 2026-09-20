@@ -4,6 +4,26 @@ All notable changes to **Stream Drops Hub** will be documented in this file.
 
 ---
 
+## [1.4.7]
+
+### Fixed
+- **트위치 수령 보안 검증 방식 교체**:
+  - `/integrity` 토큰을 확장프로그램이 직접 생성하려던 경로를 제거.
+  - `webRequest` 읽기 전용 리스너로 Twitch 탭이 실제 `gql.twitch.tv` 요청에 보낸 `Authorization`, `Client-Integrity`, 세션/버전/디바이스 헤더를 캡처.
+  - 캡처한 브라우저 세션 헤더로 정확한 `dropInstanceID`만 수령하며, integrity 거절 시 보관함 탭을 새로고침해 새 헤더를 확보하고 1회 재시도.
+  - 임의 DOM 클릭과 요청 변조는 하지 않으며, 세션 헤더는 `chrome.storage.session`에만 저장.
+
+---
+## [1.4.6]
+
+### Fixed
+- **트위치 수령 보안 검증 대응**:
+  - 수령 요청은 먼저 OAuth + Client-ID만으로 시도하고, Twitch가 integrity 검증을 요구할 때만 KPSDK 경로로 재시도.
+  - Twitch 페이지 MAIN world에서 KPSDK 스크립트를 로드하고 `kpsdk-load`/`kpsdk-ready` 이후 `/integrity` 토큰을 받아 같은 보상 ID를 다시 수령.
+  - 최신/대체 persisted query hash와 raw mutation 순으로 fallback.
+  - 최종 실패 시 기존의 일반 안내 대신 페이지 경로와 API 경로의 실제 오류 메시지를 팝업에 표시.
+
+---
 ## [1.4.5]
 
 ### Changed
@@ -11,7 +31,8 @@ All notable changes to **Stream Drops Hub** will be documented in this file.
   - 캠페인 이름의 `[0917]` 같은 MMDD 표기를 전체·트위치 탭의 날짜 분류에 사용.
   - 연도는 캠페인 종료일과 가장 가까운 유효한 날짜로 추정하여 연말·연초 처리.
   - 실제 획득일과 구분하여 `campaignDate`에 저장하며 기록 탭의 최초 처리 날짜는 유지.
-  - 유효한 날짜 표기가 없는 캠페인은 날짜 미상 유지.
+  - 제목에 날짜가 없으면 트위치 Inventory의 개별 드롭 `startAt` → 캠페인 `startAt` 순으로 날짜 분류에 사용.
+  - 트위치가 실제 획득 시각은 제공하지 않으므로 위 날짜는 표시·분류용 시작 날짜이며 기록 탭의 처리 날짜와는 별개.
 
 ---
 

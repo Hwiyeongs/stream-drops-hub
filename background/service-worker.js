@@ -1,6 +1,9 @@
+import { registerTwitchHeaderCapture } from '../src/services/twitch-headers.js';
 import { LIVE_ALARM, ensureLiveAlarm, checkLiveMonitor, openLiveNotification } from '../src/services/live-monitor.js';
 import { fetchAllDrops, claimUnifiedDrop } from '../src/services/aggregator.js';
 import { getSettings, saveSettings, initializeStorage, purgeExpiredHandledDrops, getCachedDrops, getHandledDropsLog, recordHandledDrop } from '../src/services/storage.js';
+
+registerTwitchHeaderCapture();
 
 const ALARM = 'checkDropsAlarm', BATCH_ALARM = 'continueDropsBatch';
 // One worker owns all writes and claims; queue remains usable after errors.

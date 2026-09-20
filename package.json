@@ -1,7 +1,9 @@
 {
-  "name": "stream-drops-hub-fixed",
-  "private": true,
-  "version": "1.4.5",
-  "type": "module",
-  "scripts": { "test": "node tests/regression.test.js && node tests/live-monitor.test.js" }
+    "name":  "stream-drops-hub-fixed",
+    "private":  true,
+    "version":  "1.4.7",
+    "type":  "module",
+    "scripts":  {
+                    "test":  "node tests/regression.test.js \u0026\u0026 node tests/live-monitor.test.js"
+                }
 }
