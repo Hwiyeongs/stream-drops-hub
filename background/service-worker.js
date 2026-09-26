@@ -1,3 +1,5 @@
+import { COLLECT_ALARM, ensureCollectorAlarm, checkCollector } from '../src/services/auto-collector.js';
+import { fetchCampaignCatalog } from '../src/services/collector-plans.js';
 import { registerTwitchHeaderCapture } from '../src/services/twitch-headers.js';
 import { LIVE_ALARM, ensureLiveAlarm, checkLiveMonitor, openLiveNotification } from '../src/services/live-monitor.js';
 import { fetchAllDrops, claimUnifiedDrop } from '../src/services/aggregator.js';
@@ -25,8 +27,11 @@ export async function initialize() {
   await initializeStorage();
   await ensureAlarm();
   await ensureLiveAlarm();
+  await ensureCollectorAlarm();
   await purgeExpiredHandledDrops();
 }
+const runCollector = (afterCurrent = false) => { void checkCollector(afterCurrent).catch(console.error); };
+
 async function claimById(id) {
   if (typeof id !== 'string') throw new Error('보상 ID가 올바르지 않습니다.');
   const handled = (await getHandledDropsLog())[id];
@@ -50,7 +55,8 @@ export async function pollDrops() {
   for (const drop of result.drops) {
     if (drop.stale) continue;
     const settings = await getSettings();
-    if (settings.autoClaim && (!retries[drop.id] || retries[drop.id].nextAt <= Date.now())) {
+    const autoClaim = settings.autoClaim && drop.platform === 'twitch';
+    if (autoClaim && (!retries[drop.id] || retries[drop.id].nextAt <= Date.now())) {
       try {
         await claimUnifiedDrop(drop);
         delete retries[drop.id];
@@ -61,7 +67,7 @@ export async function pollDrops() {
         const attempts = (retries[drop.id]?.attempts || 0) + 1;
         retries[drop.id] = { attempts, nextAt: Date.now() + Math.min(60, 5 * 2 ** Math.min(attempts - 1, 4)) * 60000, error: error.message };
       }
-    } else if (!settings.autoClaim && settings.enableNotifications && !notified.has(drop.id)) {
+    } else if (!autoClaim && settings.enableNotifications && !notified.has(drop.id)) {
       try {
         await notify('available:' + drop.id, `[드롭스 달성] ${drop.platformName}`, `${drop.rewardName}: 수령할 수 있습니다.`);
         notified.add(drop.id);
@@ -101,7 +107,9 @@ function updateSettings(values) {
     const settings = await saveSettings(values || {});
     await ensureAlarm();
     await ensureLiveAlarm();
+  await ensureCollectorAlarm();
     if (settings.liveMonitorEnabled) void checkLiveMonitor().catch(console.error);
+    runCollector(true);
     return settings;
   });
   settingsTail = task.catch(() => {});
@@ -111,6 +119,11 @@ function updateSettings(values) {
 export async function handleMessage(message) {
   await initialize();
   switch (message.type) {
+    case 'GET_COLLECTOR_CATALOG': {
+      const catalog = await fetchCampaignCatalog();
+      await chrome.storage.local.set({ collectorCatalog: catalog });
+      return catalog;
+    }
     case 'GET_STATE': return { ...await getCachedDrops(), settings: await getSettings() };
     case 'REFRESH_ALL': return fetchAllDrops();
     case 'CLAIM_DROP': return claimById(message.id);
@@ -150,12 +163,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === COLLECT_ALARM) runCollector();
   if (alarm.name === LIVE_ALARM) void checkLiveMonitor().catch(console.error);
   if (alarm.name === ALARM) schedule(pollDrops);
   if (alarm.name === BATCH_ALARM) schedule(async () => { await initialize(); await processBatch(); });
 });
 chrome.runtime.onInstalled.addListener(() => { schedule(async () => { await initialize(); await fetchAllDrops(); }); });
-chrome.runtime.onStartup.addListener(() => { schedule(async () => { await initialize(); await processBatch(); void checkLiveMonitor().catch(console.error); }); });
+chrome.runtime.onStartup.addListener(() => { schedule(async () => { await initialize(); await processBatch(); void checkLiveMonitor().catch(console.error); runCollector(); }); });
 // Recreate missing alarms whenever the worker wakes; register listeners synchronously first.
 schedule(initialize);
 

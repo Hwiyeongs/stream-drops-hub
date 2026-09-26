@@ -786,3 +786,16 @@ body {
   height: 1px;
   background: var(--border-color);
 }
+
+.collector-refresh {
+  padding: 7px 10px;
+  margin: 0 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.collector-refresh:disabled { opacity: .5; cursor: wait; }

@@ -4,13 +4,26 @@ import { getCachedDrops, getHandledDropsLog, getSettings, parseExpTimestamp, par
 
 const el = id => document.getElementById(id);
 let settingsBusy = true;
-const settingKeys = { settingNotify: 'enableNotifications', settingAutoClaim: 'autoClaim', settingInterval: 'pollingIntervalMinutes', settingLiveMonitor: 'liveMonitorEnabled', settingLiveAutoOpen: 'liveAutoOpen' };
-const settingIds = ['settingNotify', 'settingAutoClaim', 'settingInterval', 'settingLiveMonitor', 'settingLiveAutoOpen'];
+const settingKeys = { settingNotify: 'enableNotifications', settingAutoClaim: 'autoClaim', settingInterval: 'pollingIntervalMinutes', settingLiveMonitor: 'liveMonitorEnabled', settingLiveAutoOpen: 'liveAutoOpen', settingCollectChzzk: 'autoCollectChzzk', settingCollectSoop: 'autoCollectSoop', settingCollectCampaign: 'chzzkCollectCampaign' };
+const settingIds = Object.keys(settingKeys);
 async function renderLiveStatus() {
   const [{ liveMonitorState: state }, settings] = await Promise.all([chrome.storage.local.get('liveMonitorState'), getSettings()]);
   el('liveMonitorStatus').textContent = !settings.liveMonitorEnabled ? '방송 감지 꺼짐' : ['chzzk', 'soop'].map(p => {
     const status = state?.platforms?.[p], name = p === 'chzzk' ? '치지직' : 'SOOP';
     return name + ': ' + (!status ? '확인 중…' : status.error || ('드롭스 방송 ' + status.count + '개 · ' + new Date(status.checkedAt).toLocaleTimeString('ko-KR') + (status.actionError ? '\n' + status.actionError : '')));
+  }).join('\n');
+}
+async function renderCollector() {
+  const [{ collectorState = {}, collectorCatalog = [] }, settings] = await Promise.all([chrome.storage.local.get(['collectorState', 'collectorCatalog']), getSettings()]);
+  const list = collectorCatalog.length ? collectorCatalog : collectorState.chzzk?.catalog || [];
+  const select = el('settingCollectCampaign');
+  const options = [new Option('모든 캠페인 순차 수집', 'auto'), ...list.map(c => new Option(c.title, c.id))];
+  if (settings.chzzkCollectCampaign !== 'auto' && !list.some(c => c.id === settings.chzzkCollectCampaign)) options.push(new Option('선택한 캠페인 #' + settings.chzzkCollectCampaign + ' (현재 목록 없음)', settings.chzzkCollectCampaign));
+  select.replaceChildren(...options); select.value = settings.chzzkCollectCampaign;
+  el('collectorStatus').textContent = ['chzzk', 'soop'].map(p => {
+    const on = p === 'chzzk' ? settings.autoCollectChzzk : settings.autoCollectSoop;
+    const state = collectorState[p];
+    return (p === 'chzzk' ? '치지직: ' : 'SOOP: ') + (!on ? '꺼짐' : state?.status || '확인 중…') + (on && state?.campaigns?.length ? '\n' + state.campaigns.map(c => '· ' + c.title + ': ' + (c.completed ? '시청 조건 달성' : !c.active ? '기간 종료/시작 전' : `${c.earned}/${c.total}개 달성`)).join('\n') : '');
   }).join('\n');
 }
 function enableSettingControls() {
@@ -189,6 +202,9 @@ async function refresh() {
 }
 async function loadSettings() {
   const settings = await getSettings();
+  el('settingCollectChzzk').checked = settings.autoCollectChzzk;
+  el('settingCollectSoop').checked = settings.autoCollectSoop;
+  await renderCollector();
   el('settingLiveMonitor').checked = settings.liveMonitorEnabled;
   el('settingLiveAutoOpen').checked = settings.liveAutoOpen;
   await renderLiveStatus();
@@ -205,6 +221,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelectorAll('.tab-btn').forEach(t => t.classList.toggle('active', t === tab));
     currentTab = tab.dataset.tab; render();
   });
+  el('refreshCampaigns').addEventListener('click', async () => {
+    el('refreshCampaigns').disabled = true;
+    try { await request('GET_COLLECTOR_CATALOG'); await renderCollector(); } catch (error) { toast(error.message, 'error'); }
+    finally { el('refreshCampaigns').disabled = false; }
+  });
   el('refreshBtn').addEventListener('click', refresh);
   el('claimAllBtn').addEventListener('click', async () => {
     if (busy()) return;
@@ -214,7 +235,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     finally { claiming = false; await loadState(); }
   });
   for (const id of settingIds) el(id).addEventListener('change', async () => {
-    const value = id === 'settingInterval' ? Number(el(id).value) : el(id).checked;
+    const value = id === 'settingInterval' ? Number(el(id).value) : id === 'settingCollectCampaign' ? el(id).value : el(id).checked;
     settingsBusy = true;
     enableSettingControls();
     try {
@@ -226,6 +247,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (Object.keys(changes).some(k => k === 'dropsCache' || k === 'platformStatuses' || k === 'batchJob' || k.startsWith('handled:'))) void loadState().catch(console.error);
+    if (changes.collectorState || changes.collectorCatalog) void renderCollector().catch(console.error);
     if (changes.liveMonitorState) void renderLiveStatus().catch(console.error);
     if (changes.settings) void loadSettings().catch(console.error);
   });

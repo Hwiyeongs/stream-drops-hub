@@ -73,3 +73,22 @@ test('failed notifications remain retryable',async()=>{
  finally {chrome.notifications.create=original;}
  await m.checkLiveMonitor();assert.equal(notifications.length,2);
 });
+
+
+test('Korean reset boundary is 05:00, not midnight',async()=>{
+ const {dropsDay}=await import('../src/services/drops-day.js');
+ assert.equal(dropsDay(Date.parse('2026-09-22T04:59:59+09:00')),'2026-09-21');
+ assert.equal(dropsDay(Date.parse('2026-09-22T05:00:00+09:00')),'2026-09-22');
+ assert.equal(dropsDay(Date.parse('2027-01-01T00:00:00+09:00')),'2026-12-31');
+});
+test('same campaigns notify again at 05:00 only once, including after restart',async()=>{
+ const original=Date.now;let now=Date.parse('2026-09-21T23:59:00+09:00');Date.now=()=>now;
+ try {
+  await m.checkLiveMonitor();assert.equal(notifications.length,2);
+  now=Date.parse('2026-09-22T04:59:59+09:00');await m.checkLiveMonitor();assert.equal(notifications.length,2);
+  now=Date.parse('2026-09-22T05:00:00+09:00');await m.checkLiveMonitor();assert.equal(notifications.length,4);
+  const restarted=await import('../src/services/live-monitor.js?daily-reset-test');
+  await restarted.checkLiveMonitor();assert.equal(notifications.length,4);
+  now+=3*86400000;await restarted.checkLiveMonitor();assert.equal(notifications.length,6);
+ } finally {Date.now=original;}
+});

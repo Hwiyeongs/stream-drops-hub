@@ -101,8 +101,8 @@
 
           <div class="setting-item">
             <div class="setting-info">
-              <span class="setting-title">자동 수령 (Auto-Claim)</span>
-              <span class="setting-desc">달성된 드롭스 백그라운드 자동 수령</span>
+              <span class="setting-title">트위치 자동 수령</span>
+              <span class="setting-desc">트위치 달성 보상만 자동 수령 · 치지직·SOOP은 수동</span>
             </div>
             <label class="switch">
               <input type="checkbox" class="toggle-switch" id="settingAutoClaim">
@@ -136,6 +136,26 @@
           </div>
           <p class="setting-desc">브라우저가 실행 중일 때 동작합니다. 켜면 현재 방송도 확인하며, 치지직은 캠페인별, SOOP은 카테고리별 하루 한 번 알림합니다. 영상 재생은 직접 눌러야 할 수 있습니다.</p>
           <p id="liveMonitorStatus" class="setting-desc" role="status" style="white-space: pre-line; overflow-wrap: anywhere"></p>
+        </div>
+
+        <div class="settings-group">
+          <h3 class="settings-group-title">이터널리턴 자동 수집</h3>
+          <div class="setting-item">
+            <div class="setting-info"><label class="setting-title" for="settingCollectChzzk">치지직 자동 수집</label><span class="setting-desc">캠페인별 자동 시청 · 방송 종료 시 이어보기</span></div>
+            <input type="checkbox" class="toggle-switch" id="settingCollectChzzk">
+          </div>
+          <div class="setting-item">
+            <label for="settingCollectCampaign">치지직 캠페인</label>
+            <select id="settingCollectCampaign" class="select-input" style="max-width:230px"><option value="auto">모든 캠페인 순차 수집</option></select>
+          </div>
+          <button id="refreshCampaigns" class="collector-refresh" type="button">캠페인 목록 새로고침</button>
+          <div class="setting-item">
+            <div class="setting-info"><label class="setting-title" for="settingCollectSoop">SOOP 자동 수집</label><span class="setting-desc">대상 방송 자동 시청 · 방송 종료 시 이어보기</span></div>
+            <input type="checkbox" class="toggle-switch" id="settingCollectSoop">
+          </div>
+          <p class="setting-desc">매일 한국 시간 새벽 5시에 알림 중복 방지와 자동 수집의 일시 중지·재시도 상태가 초기화됩니다. 보상 기록은 유지됩니다. 방송 탭을 잠깐 활성화해 재생을 확인한 뒤 탭을 음소거하고 이전 탭으로 돌아옵니다. 시작할 때 소리가 잠깐 날 수 있습니다. 다른 방송 탭은 닫아 주세요. 로그인·게임 계정 연결은 직접 필요합니다. 토글을 끄면 자동으로 만든 방송 탭을 닫습니다. 탭을 직접 닫거나 이동하면 일시 중지되며, 토글을 껐다 켜면 재개합니다.</p>
+          <p class="setting-desc">치지직은 한 캠페인을 마친 뒤 다음 캠페인으로 이동합니다. 영상 재생과 서버 시청 시간 적립은 별도로 확인합니다. 쿠폰 코드 확인·복사와 게임 내 입력은 직접 진행해 주세요. 자동으로 쿠폰을 처리하거나 기록 탭으로 옮기지 않습니다.</p>
+          <p id="collectorStatus" class="setting-desc" role="status" style="white-space:pre-line;overflow-wrap:anywhere"></p>
         </div>
 
         <div class="settings-group">

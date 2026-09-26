@@ -368,3 +368,29 @@ test('Twitch display date falls back to individual drop startAt, then campaign s
  result=await fetchTwitchDrops();
  assert.equal(result.drops[0].campaignDate,'2099-09-19');
 });
+
+
+test('automatic polling leaves CHZZK and SOOP coupons available even with autoClaim ON',async()=>{
+ data.settings={autoClaim:true,enableNotifications:true};
+ chzzkClaims=[{rewardNo:10,rewardType:'CODE',code:'A'}];
+ soopAvailable=[{itemCodeIdx:1,cateName:'이터널 리턴',itemCode:'ER'}];
+ await worker.pollDrops();
+ assert.equal(data['handled:chzzk_10'],undefined);assert.equal(data['handled:soop_inv_1'],undefined);
+ assert.ok(data.dropsCache.some(d=>d.id==='chzzk_10'));assert.ok(data.dropsCache.some(d=>d.id==='soop_inv_1'));
+ assert.equal(notifications.filter(n=>n.id.startsWith('available:')).length,2);
+});
+test('explicit manual CHZZK and SOOP coupon actions still work',async()=>{
+ data.settings={autoClaim:true};
+ chzzkClaims=[{rewardNo:10,rewardType:'CODE',code:'A'}];
+ soopAvailable=[{itemCodeIdx:1,cateName:'이터널 리턴',itemCode:'ER'}];
+ await fetchAllDrops();
+ await worker.handleMessage({type:'CLAIM_DROP',id:'chzzk_10'});
+ await worker.handleMessage({type:'CLAIM_DROP',id:'soop_inv_1'});
+ assert.equal(data['handled:chzzk_10'].couponCode,'A');assert.equal(data['handled:soop_inv_1'].couponCode,'ER');
+});
+test('collector settings reject invalid campaign IDs and nonboolean toggles',async()=>{
+ await assert.rejects(storage.saveSettings({chzzkCollectCampaign:'../bad'}));
+ await assert.rejects(storage.saveSettings({autoCollectChzzk:'yes'}));
+ await storage.saveSettings({chzzkCollectCampaign:'1796',autoCollectChzzk:true});
+ assert.equal((await storage.getSettings()).chzzkCollectCampaign,'1796');
+});

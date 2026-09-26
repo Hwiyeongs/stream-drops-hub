@@ -1,4 +1,4 @@
-# Stream Drops Hub v1.4.7
+# Stream Drops Hub v1.5.1 (로컬 작업본)
 
 ## 개요
 - GitHub 저장소: https://github.com/Hwiyeongs/stream-drops-hub (Public)
@@ -23,3 +23,16 @@
 
 ## 검증 상태
 - 회귀 테스트 36개 + 방송 감지 테스트 20개 (총 56개) 전체 통과 (`npm test`).
+
+
+## v1.5.0 자동 수집
+- `src/services/collector-plans.js`: 공개 캠페인/방송, 인증된 보상·미션 진행 데이터로 수집 계획 구성.
+- `src/services/auto-collector.js`: 플랫폼별 단일 소유 탭, 재생 확인, 방송 전환, 완료 대기, OFF 정리.
+- `background/service-worker.js`: 별도 1분 수집 알람, 기존 직렬 큐를 통한 대상 게임·캠페인 수령.
+- 권한 `scripting`은 자동 생성한 치지직·SOOP 탭의 video 재생에 한정해 사용하며 Twitch 헤더 방식은 유지.
+- 기존 네트워크/토큰 수령 구현은 유지. 로그인 정보 출력이나 외부 전송 없음.
+- 로컬 검증 78개 및 격리 확장 프로그램 검사 통과. 실계정 적립·실수령은 미검증. GitHub 릴리즈는 아직 v1.4.7이며 이 작업에서는 게시하지 않음.
+
+## v1.5.1 사용자 요청 반영
+- 치지직·SOOP은 자동 시청/전환만 수행. collectorClaims 콜백 제거. 자동 수령은 트위치만 적용. 수동 쿠폰 처리는 그대로 유지.
+- 총 79개 검사 통과.

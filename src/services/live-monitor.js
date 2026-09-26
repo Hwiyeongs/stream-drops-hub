@@ -1,3 +1,4 @@
+import { dropsDay } from './drops-day.js';
 import { fetchWithTimeout } from './fetch-helper.js';
 import { getSettings } from './storage.js';
 
@@ -16,7 +17,7 @@ export function normalizeChzzkLive(live) {
   if (live.liveCategory !== CHZZK_CATEGORY || !Number.isFinite(Number(live.dropsCampaignNo)) || Number(live.dropsCampaignNo) <= 0) return null;
   if (!validId(channelId, /^[a-f0-9]{32}$/i) || !/^\d+$/.test(String(live.liveId))) return null;
   if (live.status && live.status !== 'OPEN') return null;
-  return { key: `chzzk:${live.liveId}:${live.dropsCampaignNo}`, platform: 'chzzk', notificationKey: `chzzk:campaign:${live.dropsCampaignNo}`, channelId, liveId: String(live.liveId),
+  return { key: `chzzk:${live.liveId}:${live.dropsCampaignNo}`, platform: 'chzzk', campaignId: String(live.dropsCampaignNo), notificationKey: `chzzk:campaign:${live.dropsCampaignNo}`, channelId, liveId: String(live.liveId),
     title: String(live.liveTitle || '이터널 리턴 드롭스 방송'), name: String(live.channel.channelName || '치지직 방송'),
     viewers: Number(live.concurrentUserCount) || 0, url: `https://chzzk.naver.com/live/${channelId}` };
 }
@@ -27,7 +28,7 @@ export function normalizeSoopLive(live) {
   if (!validId(userId, /^[a-z0-9_-]{1,64}$/i) || !/^\d+$/.test(String(live.broad_no))) return null;
   // Password/subscriber-only streams cannot be opened as generally watchable broadcasts.
   if (enabled(live.is_password) || enabled(live.subscription_only)) return null;
-  return { key: `soop:${live.broad_no}`, platform: 'soop', notificationKey: 'soop:category:' + SOOP_CATEGORY + ':' + new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10), channelId: userId, liveId: String(live.broad_no),
+  return { key: `soop:${live.broad_no}`, platform: 'soop', notificationKey: 'soop:category:' + SOOP_CATEGORY + ':' + dropsDay(), channelId: userId, liveId: String(live.broad_no),
     title: String(live.broad_title || '이터널 리턴 드롭스 방송'), name: String(live.user_nick || userId),
     viewers: Number(live.view_cnt) || 0, url: `https://play.sooplive.com/${userId}/${live.broad_no}` };
 }
@@ -98,7 +99,7 @@ async function openOnce(platform, live, allLives, state) {
   const owned = state.openedTabs?.[platform];
   const tab = owned && tabs.find(t => t.id === owned.id && t.url === owned.url && (!t.pendingUrl || t.pendingUrl === owned.url));
   const settings = await getSettings();
-  if (!settings.liveMonitorEnabled || !settings.liveAutoOpen) return;
+  if (!settings.liveMonitorEnabled || !settings.liveAutoOpen || (platform === 'chzzk' ? settings.autoCollectChzzk : settings.autoCollectSoop)) return;
   if (!validLiveUrl(live.url)) throw new Error('방송 주소가 올바르지 않습니다.');
   const opened = tab ? await chrome.tabs.update(tab.id, { url: live.url }) : await chrome.tabs.create({ url: live.url, active: false });
   state.openedTabs ||= {};
@@ -111,6 +112,13 @@ async function check() {
   const stored = await chrome.storage.local.get('liveMonitorState');
   const state = stored.liveMonitorState || { seen: {}, openedTabs: {}, notices: {}, platforms: {} };
   const now = Date.now();
+  const day = dropsDay(now);
+  const previousDay = state.day || (state.checkedAt ? dropsDay(state.checkedAt) : day);
+  if (previousDay !== day) {
+    state.seen = {};
+    state.notificationGroups = {};
+  }
+  state.day = day;
   state.seen = Object.fromEntries(Object.entries(state.seen || {}).filter(([, value]) => now - value.lastSeen < SEEN_TTL));
   // Migrate broadcast-level history so updating does not repeat existing alerts.
   if (!state.notificationGroups) {
@@ -118,7 +126,7 @@ async function check() {
     for (const [key, entry] of Object.entries(state.seen)) {
       if (!entry.notified) continue;
       const campaign = key.match(/^chzzk:\d+:(\d+)$/);
-      const group = campaign ? `chzzk:campaign:${campaign[1]}` : key.startsWith('soop:') ? 'soop:category:' + SOOP_CATEGORY + ':' + new Date(entry.lastSeen + 9 * 3600000).toISOString().slice(0, 10) : null;
+      const group = campaign ? `chzzk:campaign:${campaign[1]}` : key.startsWith('soop:') ? 'soop:category:' + SOOP_CATEGORY + ':' + dropsDay(entry.lastSeen) : null;
       if (group) state.notificationGroups[group] = { lastSeen: entry.lastSeen, notified: true };
     }
   }
@@ -161,7 +169,7 @@ async function check() {
       } catch (error) { state.platforms[platform].actionError = '알림 표시 실패: ' + error.message; }
     }
     settings = await getSettings();
-    if (settings.liveMonitorEnabled && settings.liveAutoOpen) {
+    if (settings.liveMonitorEnabled && settings.liveAutoOpen && !(platform === 'chzzk' ? settings.autoCollectChzzk : settings.autoCollectSoop)) {
       const unopened = lives.filter(live => !state.seen[live.key].opened);
       if (unopened.length) {
         try {

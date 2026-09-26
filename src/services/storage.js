@@ -1,5 +1,5 @@
 /** Background-owned writes; per-item keys prevent unrelated records overwriting each other. */
-const DEFAULT_SETTINGS = { pollingIntervalMinutes: 10, enableNotifications: true, autoClaim: false, liveMonitorEnabled: false, liveAutoOpen: false };
+const DEFAULT_SETTINGS = { pollingIntervalMinutes: 10, enableNotifications: true, autoClaim: false, liveMonitorEnabled: false, liveAutoOpen: false, autoCollectChzzk: false, autoCollectSoop: false, chzzkCollectCampaign: 'auto' };
 const HANDLED = 'handled:', COUPON = 'coupon:';
 export async function getSettings() {
   const { settings } = await chrome.storage.local.get('settings');
@@ -11,11 +11,15 @@ export async function saveSettings(values) {
     if (![5, 10, 15, 30].includes(values.pollingIntervalMinutes)) throw new Error('지원하지 않는 확인 주기입니다.');
     settings.pollingIntervalMinutes = values.pollingIntervalMinutes;
   }
-  for (const key of ['enableNotifications', 'autoClaim', 'liveMonitorEnabled', 'liveAutoOpen']) {
+  for (const key of ['enableNotifications', 'autoClaim', 'liveMonitorEnabled', 'liveAutoOpen', 'autoCollectChzzk', 'autoCollectSoop']) {
     if (key in values) {
       if (typeof values[key] !== 'boolean') throw new Error('설정 값이 올바르지 않습니다.');
       settings[key] = values[key];
     }
+  }
+  if ('chzzkCollectCampaign' in values) {
+    if (typeof values.chzzkCollectCampaign !== 'string' || !/^(auto|[1-9][0-9]*)$/.test(values.chzzkCollectCampaign)) throw new Error('캠페인 선택 값이 올바르지 않습니다.');
+    settings.chzzkCollectCampaign = values.chzzkCollectCampaign;
   }
   await chrome.storage.local.set({ settings });
   return settings;
