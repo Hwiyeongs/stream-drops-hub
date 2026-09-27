@@ -12,52 +12,83 @@ export async function ensureCollectorAlarm() {
   if ((await chrome.alarms.get(COLLECT_ALARM))?.periodInMinutes !== 1) await chrome.alarms.create(COLLECT_ALARM, { periodInMinutes: 1 });
 }
 // Executed only in an extension-created tab whose exact URL is still owned.
-export async function controlVideo(expectedUrl, start = false) {
+export async function controlVideo(expectedUrl, start = false, platform = 'chzzk') {
   if (location.href !== expectedUrl) return { state: 'navigation' };
-  const videos = [...document.querySelectorAll('video')].filter(v => {
+  const videos = [...document.querySelectorAll('video')];
+  const visible = videos.filter(v => {
     const r = v.getBoundingClientRect(); return r.width > 120 && r.height > 80;
-  }).sort((a,b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight);
-  const video = videos[0];
+  }).sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight);
+  // A single player can report zero layout size while its window is occluded.
+  const video = (platform === 'soop' ? document.querySelector('video#livePlayer') : null) || visible[0] || (videos.length === 1 ? videos[0] : null);
   if (!video) return { state: 'missing' };
-  if (video.error) return { state: 'error' };
-  if (start) video.muted = false;
-  if (video.paused && !start) return { state: 'paused' };
+  const result = (state, reason = null, deltaSeconds = 0) => ({
+    state, reason, readyState: video.readyState, networkState: video.networkState,
+    paused: video.paused, ended: video.ended, muted: video.muted,
+    deltaSeconds: Math.round(deltaSeconds * 100) / 100,
+  });
+  // Browser-tab mute does not make the media element eligible for muted autoplay.
+  if (start) { video.defaultMuted = true; video.muted = true; }
+  if (start && platform === 'soop') {
+    // SOOP's initial data:video is a short placeholder. Its own play control
+    // starts the live stream; playing the placeholder alone never joins it.
+    const playButton = document.querySelector('button#play.play');
+    if (playButton && (video.paused || video.ended || video.currentSrc?.startsWith('data:video/'))) {
+      playButton.click();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      video.muted = true;
+    }
+    if (video.currentSrc?.startsWith('data:video/')) return result('loading', 'SoopPlayerStarting');
+  }
+  if (video.error) return result('error', `MediaError${Number(video.error.code) || 0}`);
+  if (video.paused && !start) return result('paused');
   if (video.paused) {
-    try { await Promise.race([video.play(), new Promise((_, reject) => setTimeout(() => reject(Error('timeout')), 4000))]); }
-    catch { return { state: 'blocked' }; }
+    let timer;
+    try {
+      await Promise.race([
+        video.play(),
+        new Promise((_, reject) => { timer = setTimeout(() => reject({ name: 'TimeoutError' }), 4000); }),
+      ]);
+    } catch (error) {
+      const reason = ['NotAllowedError', 'AbortError', 'NotSupportedError', 'TimeoutError'].includes(error?.name) ? error.name : 'PlaybackError';
+      return result('blocked', reason);
+    } finally { clearTimeout(timer); }
   }
   const before = video.currentTime;
-  await new Promise(resolve => setTimeout(resolve, 1500));
-  if (location.href !== expectedUrl) return { state: 'navigation' };
-  return { state: !video.paused && !video.ended && video.currentTime > before + 0.1 ? 'playing' : 'stalled' };
+  await new Promise(resolve => setTimeout(resolve, 2500));
+  if (location.href !== expectedUrl) return result('navigation');
+  const delta = Math.max(0, video.currentTime - before);
+  if (start) video.muted = true;
+  return result(!video.paused && !video.ended && delta > 0.1 ? 'playing' : 'stalled', null, delta);
 }
-async function probe(session, start = false) {
+async function probe(session, start = false, platform = 'chzzk') {
   try {
-    const results = await chrome.scripting.executeScript({ target: { tabId: session.tabId }, func: controlVideo, args: [session.url, start] });
-    return results?.[0]?.result?.state || 'missing';
-  } catch { return 'missing'; }
+    const results = await chrome.scripting.executeScript({ target: { tabId: session.tabId }, func: controlVideo, args: [session.url, start, platform] });
+    return results?.[0]?.result || { state: 'missing' };
+  } catch { return { state: 'injection_error', reason: 'ScriptingFailure' }; }
 }
 // Activate only for startup/recovery. Never take focus back after a user switches tabs.
-async function startPlayback(session, platform, previousTab) {
+async function startPlayback(session, platform, previousTab, fromBlank = false) {
   session.lastStartAt = Date.now();
-  let playback = 'missing';
+  let playback = { state: 'missing' };
   const windowId = (await chrome.tabs.get(session.tabId)).windowId;
   try {
-    await chrome.tabs.update(session.tabId, { active: true, muted: false });
+    await chrome.tabs.update(session.tabId, { active: true, muted: true, autoDiscardable: false });
     for (let attempt = 0; attempt < 8; attempt++) {
       const settings = await getSettings();
-      if (!settings[flag(platform)]) return 'cancelled';
+      if (!settings[flag(platform)]) return { state: 'cancelled' };
       const tab = await chrome.tabs.get(session.tabId);
-      if ((tab.pendingUrl && tab.pendingUrl !== session.url) || (!tab.pendingUrl && tab.url !== session.url)) return 'navigation';
-      if (!tab.active) return 'interrupted';
-      if (tab.url === session.url && tab.status !== 'loading') {
-        playback = await probe(session, true);
-        if (playback === 'playing') {
-          if (!await ownedTab(session)) return 'navigation';
-          await chrome.tabs.update(session.tabId, { muted: true });
-          return playback;
-        }
-        if (!['missing', 'stalled'].includes(playback)) return playback;
+      const initialBlank = fromBlank && tab.url === 'about:blank' && (!tab.pendingUrl || tab.pendingUrl === session.url);
+      const reloading = tab.status === 'loading' && !tab.pendingUrl && (!tab.url || tab.url === 'about:blank');
+      if (!initialBlank && !reloading && ((tab.pendingUrl && tab.pendingUrl !== session.url) || (!tab.pendingUrl && tab.url !== session.url))) return { state: 'navigation' };
+      if (!tab.active) return { state: 'interrupted' };
+      if (initialBlank || reloading || tab.discarded || tab.status === 'loading') {
+        playback = { state: tab.discarded ? 'discarded' : 'loading' };
+        session.diagnostic = { platform, ...playback, attempt: attempt + 1, checkedAt: Date.now() };
+      } else if (tab.url === session.url) {
+        playback = await probe(session, true, platform);
+        session.diagnostic = { platform, ...playback, attempt: attempt + 1, checkedAt: Date.now() };
+        if (playback.state === 'playing') return playback;
+        if (playback.state === 'navigation') return playback;
       }
       if (attempt < 7) await new Promise(resolve => setTimeout(resolve, 1000));
     }
@@ -78,6 +109,15 @@ async function ownedTab(session) {
     const tab = await chrome.tabs.get(session.tabId);
     return (tab.url === session.url || tab.pendingUrl === session.url) && (!tab.pendingUrl || tab.pendingUrl === session.url) ? tab : null;
   } catch { return null; }
+}
+async function loadingOwnedTab(session) {
+  if (!session?.tabId) return false;
+  try {
+    const tab = await chrome.tabs.get(session.tabId);
+    // Chrome can briefly expose about:blank without pendingUrl during a reload.
+    // A completed navigation or a different pendingUrl still means the user left.
+    return tab.status === 'loading' && !tab.pendingUrl && (!tab.url || tab.url === 'about:blank');
+  } catch { return false; }
 }
 async function release(session) {
   const tab = await ownedTab(session);
@@ -106,7 +146,7 @@ async function run() {
       const old = state[platform] || {};
       // Keep ownership of a still-open stream; never close a user-navigated tab.
       const tab = await ownedTab(old);
-      state[platform] = tab ? { tabId: old.tabId, url: old.url, liveKey: old.liveKey,
+      state[platform] = (tab || await loadingOwnedTab(old)) ? { tabId: old.tabId, url: old.url, liveKey: old.liveKey,
         campaignId: old.campaignId, progressAt: Date.now() } : {};
     }
   }
@@ -124,6 +164,10 @@ async function run() {
     try {
       const selected = settings.chzzkCollectCampaign || 'auto';
       if (session.tabId && !await ownedTab(session)) {
+        if (await loadingOwnedTab(session)) {
+          session.status = '방송 페이지 다시 로딩 중 · 다음 확인에서 재생 상태 확인';
+          session.checkedAt = Date.now(); await persist(state); continue;
+        }
         session.userStopped = true; session.status = '탭을 닫거나 이동하여 일시 중지됨'; await persist(state); continue;
       }
       const plan = platform === 'chzzk' ? await chzzkPlan(selected) : await soopPlan();
@@ -154,30 +198,57 @@ async function run() {
       if (!tab || session.url !== live.url || session.liveKey !== live.key) {
         const [previousActive] = await chrome.tabs.query({ active: true, ...(tab ? { windowId: tab.windowId } : { lastFocusedWindow: true }) });
         const previous = tab;
-        tab = previous ? await chrome.tabs.update(tab.id, { url: live.url }) : await chrome.tabs.create({ url: live.url, active: false });
+        if (previous) {
+          tab = await chrome.tabs.update(tab.id, { url: live.url, muted: true, autoDiscardable: false });
+        } else {
+          // Mute an empty owned tab before loading the broadcaster page.
+          tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+          try {
+            await chrome.tabs.update(tab.id, { muted: true, autoDiscardable: false });
+            tab = await chrome.tabs.update(tab.id, { url: live.url });
+          } catch (error) {
+            try { if ((await chrome.tabs.get(tab.id)).url === 'about:blank') await chrome.tabs.remove(tab.id); } catch {}
+            throw error;
+          }
+        }
         Object.assign(session, { tabId: tab.id, url: live.url, liveKey: live.key, campaignId: campaign.id, title: campaign.title, openedAt: Date.now(), failures: 0, lastProgress: campaign.minutes, progressAt: Date.now() });
         await persist(state);
-        playback = await startPlayback(session, platform, previousActive);
+        playback = await startPlayback(session, platform, previousActive, !previous);
       } else {
-        playback = await probe(session);
-        if (playback !== 'playing' && playback !== 'navigation' && Date.now() - (session.lastStartAt || 0) >= 60000) {
-          const [previousActive] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
-          playback = await startPlayback(session, platform, previousActive);
-        } else if (playback === 'playing' && await ownedTab(session)) {
-          await chrome.tabs.update(session.tabId, { muted: true });
+        playback = tab.discarded ? { state: 'discarded' } : await probe(session, false, platform);
+        session.diagnostic = { platform, ...playback, attempt: 0, checkedAt: Date.now() };
+        if (playback.state !== 'playing' && playback.state !== 'navigation' &&
+            (tab.discarded || Date.now() - (session.lastStartAt || 0) >= 60000)) {
+          if (platform === 'soop' && !tab.discarded) {
+            // A single background probe can miss a playing stream. Retry the
+            // existing player without pulling the user's tab into focus.
+            playback = await probe(session, true, platform);
+            session.diagnostic = { platform, ...playback, attempt: 1, recovery: 'background', checkedAt: Date.now() };
+          } else {
+            const [previousActive] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+            playback = await startPlayback(session, platform, previousActive);
+          }
+        } else if (playback.state === 'playing' && await ownedTab(session)) {
+          await chrome.tabs.update(session.tabId, { muted: true, autoDiscardable: false });
         }
       }
       {
-        if (playback === 'cancelled') { await release(session); state[platform] = { status: '꺼짐' }; await persist(state); continue; }
-        if (playback === 'navigation') { session.userStopped = true; session.status = '방송 페이지 이동 감지 · 일시 중지'; }
-        else if (playback === 'blocked' || playback === 'missing') {
-          session.status = `${campaign.title} · ${playback === 'blocked' ? '재생 버튼을 직접 눌러 주세요' : '플레이어 미감지 · 로그인/재생 화면 확인 필요'}`;
+        if (playback.state === 'cancelled') { await release(session); state[platform] = { status: '꺼짐' }; await persist(state); continue; }
+        if (playback.state === 'navigation') { session.userStopped = true; session.status = '방송 페이지 이동 감지 · 일시 중지'; }
+        else if (playback.state === 'interrupted') {
+          session.status = `${campaign.title} · 탭 전환 감지 · 다음 확인에서 재생 상태를 다시 확인합니다`;
         } else {
-          session.failures = playback === 'playing' ? 0 : (session.failures || 0) + 1;
-          session.status = `${campaign.title} · ${playback === 'playing' ? '재생 중' : '재생 재시도 중'}`;
+          const playing = playback.state === 'playing';
+          session.failures = playing ? 0 : (session.failures || 0) + 1;
+          const reason = playback.reason ? ` (${playback.reason})` : '';
+          const detail = playback.state === 'missing' ? '플레이어 미감지 · 로그인/재생 화면 확인 필요'
+            : playback.state === 'blocked' ? `음소거 재생 실패${reason} · 다음 확인에서 재시도`
+            : playback.state === 'injection_error' ? '플레이어 검사 실패 · 다음 확인에서 재시도'
+            : '재생 재시도 중';
+          session.status = `${campaign.title} · ${playing ? '재생 중' : detail}`;
           if (session.failures >= 3) {
             session.cooldowns ||= {}; session.cooldowns[live.key] = Date.now() + 10 * 60000;
-            session.status = '재생 오류 · 다음 확인에서 다른 대상 방송으로 전환';
+            session.status = `재생 오류${reason} · 다음 확인에서 다른 대상 방송으로 전환`;
           }
         }
         if (campaign.minutes !== null && campaign.minutes !== session.lastProgress) { session.lastProgress = campaign.minutes; session.progressAt = Date.now(); }
