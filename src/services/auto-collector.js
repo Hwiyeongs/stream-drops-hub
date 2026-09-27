@@ -1,7 +1,7 @@
 import { dropsDay } from './drops-day.js';
 import { getSettings } from './storage.js';
 import { chzzkPlan, soopPlan } from './collector-plans.js';
-import { validLiveUrl } from './live-monitor.js';
+import { validLiveUrl, sameLiveUrl } from './live-monitor.js';
 
 export const COLLECT_ALARM = 'collectEternalReturnDrops';
 const flag = p => p === 'chzzk' ? 'autoCollectChzzk' : 'autoCollectSoop';
@@ -11,9 +11,23 @@ export async function ensureCollectorAlarm() {
   if (!s.autoCollectChzzk && !s.autoCollectSoop) { await chrome.alarms.clear(COLLECT_ALARM); return; }
   if ((await chrome.alarms.get(COLLECT_ALARM))?.periodInMinutes !== 1) await chrome.alarms.create(COLLECT_ALARM, { periodInMinutes: 1 });
 }
-// Executed only in an extension-created tab whose exact URL is still owned.
+// Executed only in an extension-created tab still showing the owned broadcast.
 export async function controlVideo(expectedUrl, start = false, platform = 'chzzk') {
-  if (location.href !== expectedUrl) return { state: 'navigation' };
+  // This function is serialized into the page; imported helpers are unavailable there.
+  const sameLocation = current => {
+    if (current === expectedUrl) return true;
+    if (platform !== 'soop') return false;
+    try {
+      const first = new URL(expectedUrl), second = new URL(current);
+      const hosts = ['play.sooplive.com', 'play.sooplive.co.kr'];
+      const safe = (raw, parsed) => /^https:\/\/([^/?#]+)\//i.exec(raw)?.[1]?.toLowerCase() === parsed.hostname &&
+        parsed.protocol === 'https:' && hosts.includes(parsed.hostname) && !parsed.username &&
+        !parsed.password && !parsed.port && !parsed.search && !parsed.hash &&
+        /^\/[a-z0-9_-]{1,64}\/\d+$/i.test(parsed.pathname);
+      return safe(expectedUrl, first) && safe(current, second) && first.pathname === second.pathname;
+    } catch { return false; }
+  };
+  if (!sameLocation(location.href)) return { state: 'navigation' };
   const videos = [...document.querySelectorAll('video')];
   const visible = videos.filter(v => {
     const r = v.getBoundingClientRect(); return r.width > 120 && r.height > 80;
@@ -55,7 +69,7 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
   }
   const before = video.currentTime;
   await new Promise(resolve => setTimeout(resolve, 2500));
-  if (location.href !== expectedUrl) return result('navigation');
+  if (!sameLocation(location.href)) return result('navigation');
   const delta = Math.max(0, video.currentTime - before);
   if (start) video.muted = true;
   return result(!video.paused && !video.ended && delta > 0.1 ? 'playing' : 'stalled', null, delta);
@@ -77,14 +91,14 @@ async function startPlayback(session, platform, previousTab, fromBlank = false) 
       const settings = await getSettings();
       if (!settings[flag(platform)]) return { state: 'cancelled' };
       const tab = await chrome.tabs.get(session.tabId);
-      const initialBlank = fromBlank && tab.url === 'about:blank' && (!tab.pendingUrl || tab.pendingUrl === session.url);
+      const initialBlank = fromBlank && tab.url === 'about:blank' && (!tab.pendingUrl || sameLiveUrl(session.url, tab.pendingUrl));
       const reloading = tab.status === 'loading' && !tab.pendingUrl && (!tab.url || tab.url === 'about:blank');
-      if (!initialBlank && !reloading && ((tab.pendingUrl && tab.pendingUrl !== session.url) || (!tab.pendingUrl && tab.url !== session.url))) return { state: 'navigation' };
+      if (!initialBlank && !reloading && ((tab.pendingUrl && !sameLiveUrl(session.url, tab.pendingUrl)) || (!tab.pendingUrl && !sameLiveUrl(session.url, tab.url)))) return { state: 'navigation' };
       if (!tab.active) return { state: 'interrupted' };
       if (initialBlank || reloading || tab.discarded || tab.status === 'loading') {
         playback = { state: tab.discarded ? 'discarded' : 'loading' };
         session.diagnostic = { platform, ...playback, attempt: attempt + 1, checkedAt: Date.now() };
-      } else if (tab.url === session.url) {
+      } else if (sameLiveUrl(session.url, tab.url)) {
         playback = await probe(session, true, platform);
         session.diagnostic = { platform, ...playback, attempt: attempt + 1, checkedAt: Date.now() };
         if (playback.state === 'playing') return playback;
@@ -107,7 +121,8 @@ async function ownedTab(session) {
   if (!session?.tabId) return null;
   try {
     const tab = await chrome.tabs.get(session.tabId);
-    return (tab.url === session.url || tab.pendingUrl === session.url) && (!tab.pendingUrl || tab.pendingUrl === session.url) ? tab : null;
+    return (sameLiveUrl(session.url, tab.url) || sameLiveUrl(session.url, tab.pendingUrl)) &&
+      (!tab.pendingUrl || sameLiveUrl(session.url, tab.pendingUrl)) ? tab : null;
   } catch { return null; }
 }
 async function loadingOwnedTab(session) {

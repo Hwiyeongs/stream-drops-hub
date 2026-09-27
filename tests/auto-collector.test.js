@@ -259,3 +259,45 @@ test('SOOP navigation to another pending address still pauses collection',async(
  assert.equal(data.collectorState.soop.userStopped,true);
  assert.match(data.collectorState.soop.status,/일시 중지/);
 });
+
+test('SOOP official host redirects keep the owned broadcast in both directions',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectSoop=true;
+ soopLives=[{broad_no:1,broad_cate_no:'40120',is_drops:1,user_id:'first'}];
+ await checkCollector();
+ tabs[0].url='https://play.sooplive.co.kr/first/1';
+ actions=[];await checkCollector();
+ assert.equal(data.collectorState.soop.userStopped,undefined);
+ assert.equal(data.collectorState.soop.diagnostic.state,'playing');
+ assert.equal(actions.some(a=>a[0]==='create'||a[0]==='update'&&a[1].url),false);
+ data.collectorState.soop.url='https://play.sooplive.co.kr/first/1';
+ tabs[0].url='https://play.sooplive.com/first/1';
+ await checkCollector();
+ assert.equal(data.collectorState.soop.userStopped,undefined);
+ assert.equal(data.collectorState.soop.diagnostic.state,'playing');
+});
+test('SOOP matching pending host redirect is owned; another broadcast pauses without overwrite',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectSoop=true;
+ soopLives=[{broad_no:1,broad_cate_no:'40120',is_drops:1,user_id:'first'}];
+ await checkCollector();
+ Object.assign(tabs[0],{pendingUrl:'https://play.sooplive.co.kr/first/1',status:'loading'});
+ await checkCollector();
+ assert.equal(data.collectorState.soop.userStopped,undefined);
+ Object.assign(tabs[0],{url:'https://play.sooplive.co.kr/other/999',pendingUrl:undefined,status:'complete'});
+ actions=[];await checkCollector();
+ assert.equal(data.collectorState.soop.userStopped,true);
+ assert.equal(tabs[0].url,'https://play.sooplive.co.kr/other/999');
+ assert.equal(actions.some(a=>a[0]==='update'&&a[1].url),false);
+});
+test('injected SOOP playback accepts only matching official host redirects',async()=>{
+ const originalLocation=globalThis.location,originalDocument=globalThis.document;
+ const expected='https://play.sooplive.com/first/1';
+ globalThis.document={querySelectorAll:()=>[],querySelector:()=>null};
+ try {
+   globalThis.location={href:'https://play.sooplive.co.kr/first/1'};
+   assert.equal((await (await import('../src/services/auto-collector.js')).controlVideo(expected,false,'soop')).state,'missing');
+   for (const href of ['https://play.sooplive.co.kr/other/999','https://play.sooplive.co.kr/first/1?next=x','https://example.com/']) {
+     globalThis.location={href};
+     assert.equal((await (await import('../src/services/auto-collector.js')).controlVideo(expected,false,'soop')).state,'navigation');
+   }
+ } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
+});

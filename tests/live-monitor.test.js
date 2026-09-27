@@ -92,3 +92,26 @@ test('same campaigns notify again at 05:00 only once, including after restart',a
   now+=3*86400000;await restarted.checkLiveMonitor();assert.equal(notifications.length,6);
  } finally {Date.now=original;}
 });
+
+test('SOOP live URLs accept only strict official broadcast addresses',()=>{
+ const valid=['https://play.sooplive.com/tester/123','https://play.sooplive.co.kr/tester/123'];
+ for (const url of valid) assert.equal(m.validLiveUrl(url),true,url);
+ for (const url of ['http://play.sooplive.co.kr/tester/123','https://play.sooplive.co.kr:443/tester/123',
+   'https://user@play.sooplive.co.kr/tester/123','https://play.sooplive.co.kr/tester/123?q=1',
+   'https://play.sooplive.co.kr/tester/123#x','https://evil.example/tester/123',
+   'https://play.sooplive.co.kr/tester','https://play.sooplive.co.kr/tester/123/extra'])
+   assert.equal(m.validLiveUrl(url),false,url);
+ assert.equal(m.sameLiveUrl(valid[0],valid[1]),true);
+ assert.equal(m.sameLiveUrl(valid[1],valid[0]),true);
+ assert.equal(m.sameLiveUrl(valid[0],'https://play.sooplive.co.kr/other/999'),false);
+});
+test('SOOP monitor reuses its owned tab after official host redirect',async()=>{
+ data.settings.liveAutoOpen=true;chzzk=[];
+ await m.checkLiveMonitor();
+ assert.equal(tabs.length,1);
+ tabs[0].url='https://play.sooplive.co.kr/tester/2';
+ soops=[{...soop,broad_no:3}];
+ await m.checkLiveMonitor();
+ assert.equal(tabs.length,1);
+ assert.equal(tabs[0].url,'https://play.sooplive.com/tester/3');
+});

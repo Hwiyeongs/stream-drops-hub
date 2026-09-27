@@ -74,14 +74,26 @@ export async function ensureLiveAlarm() {
   if (!settings.liveMonitorEnabled) { await chrome.alarms.clear(LIVE_ALARM); return; }
   if ((await chrome.alarms.get(LIVE_ALARM))?.periodInMinutes !== 1) await chrome.alarms.create(LIVE_ALARM, { periodInMinutes: 1 });
 }
-export function validLiveUrl(url) {
+function liveAddress(url) {
+  if (typeof url !== 'string') return null;
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'https:' && !parsed.username && !parsed.password && !parsed.port && !parsed.search && !parsed.hash && (
-      (parsed.hostname === 'chzzk.naver.com' && /^\/live\/[a-f0-9]{32}$/i.test(parsed.pathname)) ||
-      (parsed.hostname === 'play.sooplive.com' && /^\/[a-z0-9_-]{1,64}\/\d+$/i.test(parsed.pathname))
-    );
-  } catch { return false; }
+    const authority = /^https:\/\/([^/?#]+)\//i.exec(url)?.[1];
+    if (parsed.protocol !== 'https:' || authority?.toLowerCase() !== parsed.hostname ||
+        parsed.username || parsed.password || parsed.port || parsed.search || parsed.hash) return null;
+    if (parsed.hostname === 'chzzk.naver.com' && /^\/live\/[a-f0-9]{32}$/i.test(parsed.pathname))
+      return { platform: 'chzzk', path: parsed.pathname };
+    if (['play.sooplive.com', 'play.sooplive.co.kr'].includes(parsed.hostname) &&
+        /^\/[a-z0-9_-]{1,64}\/\d+$/i.test(parsed.pathname))
+      return { platform: 'soop', path: parsed.pathname };
+  } catch { /* Invalid URL. */ }
+  return null;
+}
+export function validLiveUrl(url) { return liveAddress(url) !== null; }
+export function sameLiveUrl(expected, actual) {
+  const first = liveAddress(expected), second = liveAddress(actual);
+  return !!first && !!second && first.platform === second.platform &&
+    (first.platform === 'soop' ? first.path === second.path : expected === actual);
 }
 async function openOnce(platform, live, allLives, state) {
   const patterns = platform === 'chzzk' ? ['https://chzzk.naver.com/live/*'] : ['https://play.sooplive.com/*', 'https://play.sooplive.co.kr/*'];
@@ -97,7 +109,7 @@ async function openOnce(platform, live, allLives, state) {
   if (tabs.some(matches)) return true;
   // Leave a user-navigated tab alone. Reuse only a tab still at the URL this monitor opened.
   const owned = state.openedTabs?.[platform];
-  const tab = owned && tabs.find(t => t.id === owned.id && t.url === owned.url && (!t.pendingUrl || t.pendingUrl === owned.url));
+  const tab = owned && tabs.find(t => t.id === owned.id && sameLiveUrl(owned.url, t.url) && (!t.pendingUrl || sameLiveUrl(owned.url, t.pendingUrl)));
   const settings = await getSettings();
   if (!settings.liveMonitorEnabled || !settings.liveAutoOpen || (platform === 'chzzk' ? settings.autoCollectChzzk : settings.autoCollectSoop)) return;
   if (!validLiveUrl(live.url)) throw new Error('방송 주소가 올바르지 않습니다.');

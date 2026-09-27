@@ -242,7 +242,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       await saveSettings({ [settingKeys[id]]: value });
       toast('설정과 확인 주기를 적용했습니다.', 'success');
     } catch (error) { toast(error.message, 'error'); }
-    finally { settingsBusy = false; await loadSettings(); }
+    finally {
+      settingsBusy = false;
+      try { await loadSettings(); } catch (error) { toast(error.message, 'error'); }
+      finally { enableSettingControls(); }
+    }
   });
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
@@ -251,11 +255,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (changes.liveMonitorState) void renderLiveStatus().catch(console.error);
     if (changes.settings) void loadSettings().catch(console.error);
   });
+  let initialized = false;
   try {
     await request('GET_STATE'); // Finish migration before rendering any old cache.
     await Promise.all([loadState(), loadSettings()]);
-    settingsBusy = false;
-    enableSettingControls();
-    await refresh();
+    initialized = true;
   } catch (error) { toast(error.message, 'error'); }
+  finally { settingsBusy = false; enableSettingControls(); }
+  if (initialized) {
+    try { await refresh(); } catch (error) { toast(error.message, 'error'); }
+  }
 });
