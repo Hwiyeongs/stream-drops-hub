@@ -32,6 +32,7 @@ function enableSettingControls() {
 }
 let currentTab = 'all', drops = [], log = {}, statuses = {}, batchJob = null;
 let refreshing = false, claiming = false, renderRevision = 0, lastBatchNotice = null;
+let toastTimer = null;
 const create = (tag, className, text) => {
   const node = document.createElement(tag);
   node.className = className;
@@ -39,9 +40,16 @@ const create = (tag, className, text) => {
   return node;
 };
 function toast(message, type = 'info') {
-  const node = create('div', `toast toast-${type}`, message);
-  el('toastContainer').appendChild(node);
-  setTimeout(() => node.remove(), 5000);
+  const container = el('toastContainer');
+  const node = container.firstElementChild || create('div', 'toast');
+  node.className = `toast toast-${type}`;
+  node.textContent = message;
+  container.replaceChildren(node);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    node.remove();
+    toastTimer = null;
+  }, 5000);
 }
 function busy() { return claiming || batchJob?.status === 'running'; }
 function active(drop) {
