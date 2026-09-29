@@ -7,6 +7,7 @@ export const CHZZK_CATEGORY = 'Black_Survival_Eternal_Return';
 export const SOOP_CATEGORY = '40120';
 const SEEN_TTL = 7 * 86400000;
 const MAX_PAGES = 10;
+const TWITCH_PAGES = new Set(['drops', 'directory', 'search', 'settings', 'subscriptions', 'dashboard', 'login', 'logout', 'videos', 'wallet', 'inventory']);
 let pending = null;
 
 function enabled(value) { return value === true || value === 1 || value === '1' || value === 'Y'; }
@@ -80,7 +81,11 @@ function liveAddress(url) {
     const parsed = new URL(url);
     const authority = /^https:\/\/([^/?#]+)\//i.exec(url)?.[1];
     if (parsed.protocol !== 'https:' || authority?.toLowerCase() !== parsed.hostname ||
-        parsed.username || parsed.password || parsed.port || parsed.search || parsed.hash) return null;
+        parsed.username || parsed.password || parsed.port) return null;
+    if (['www.twitch.tv', 'twitch.tv'].includes(parsed.hostname) && /^\/[a-z0-9_]{1,25}\/?$/i.test(parsed.pathname) &&
+        !TWITCH_PAGES.has(parsed.pathname.split('/')[1].toLowerCase()))
+      return { platform: 'twitch', path: parsed.pathname.replace(/\/$/, '').toLowerCase() };
+    if (parsed.search || parsed.hash) return null;
     if (parsed.hostname === 'chzzk.naver.com' && /^\/live\/[a-f0-9]{32}$/i.test(parsed.pathname))
       return { platform: 'chzzk', path: parsed.pathname };
     if (['play.sooplive.com', 'play.sooplive.co.kr'].includes(parsed.hostname) &&
@@ -89,11 +94,16 @@ function liveAddress(url) {
   } catch { /* Invalid URL. */ }
   return null;
 }
-export function validLiveUrl(url) { return liveAddress(url) !== null; }
+export function validLiveUrl(url) {
+  const address = liveAddress(url);
+  if (!address) return false;
+  if (address.platform !== 'twitch') return true;
+  try { const parsed = new URL(url); return !parsed.search && !parsed.hash; } catch { return false; }
+}
 export function sameLiveUrl(expected, actual) {
   const first = liveAddress(expected), second = liveAddress(actual);
   return !!first && !!second && first.platform === second.platform &&
-    (first.platform === 'soop' ? first.path === second.path : expected === actual);
+    (first.platform === 'soop' || first.platform === 'twitch' ? first.path === second.path : expected === actual);
 }
 async function openOnce(platform, live, allLives, state) {
   const patterns = platform === 'chzzk' ? ['https://chzzk.naver.com/live/*'] : ['https://play.sooplive.com/*', 'https://play.sooplive.co.kr/*'];

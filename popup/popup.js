@@ -4,7 +4,7 @@ import { getCachedDrops, getHandledDropsLog, getSettings, parseExpTimestamp, par
 
 const el = id => document.getElementById(id);
 let settingsBusy = true;
-const settingKeys = { settingNotify: 'enableNotifications', settingAutoClaim: 'autoClaim', settingInterval: 'pollingIntervalMinutes', settingLiveMonitor: 'liveMonitorEnabled', settingLiveAutoOpen: 'liveAutoOpen', settingCollectChzzk: 'autoCollectChzzk', settingCollectSoop: 'autoCollectSoop', settingCollectCampaign: 'chzzkCollectCampaign' };
+const settingKeys = { settingNotify: 'enableNotifications', settingAutoClaim: 'autoClaim', settingInterval: 'pollingIntervalMinutes', settingLiveMonitor: 'liveMonitorEnabled', settingLiveAutoOpen: 'liveAutoOpen', settingCollectChzzk: 'autoCollectChzzk', settingCollectSoop: 'autoCollectSoop', settingCollectTwitch: 'autoCollectTwitch', settingCollectCampaign: 'chzzkCollectCampaign' };
 const settingIds = Object.keys(settingKeys);
 async function renderLiveStatus() {
   const [{ liveMonitorState: state }, settings] = await Promise.all([chrome.storage.local.get('liveMonitorState'), getSettings()]);
@@ -20,11 +20,11 @@ async function renderCollector() {
   const options = [new Option('모든 캠페인 순차 수집', 'auto'), ...list.map(c => new Option(c.title, c.id))];
   if (settings.chzzkCollectCampaign !== 'auto' && !list.some(c => c.id === settings.chzzkCollectCampaign)) options.push(new Option('선택한 캠페인 #' + settings.chzzkCollectCampaign + ' (현재 목록 없음)', settings.chzzkCollectCampaign));
   select.replaceChildren(...options); select.value = settings.chzzkCollectCampaign;
-  el('collectorStatus').textContent = ['chzzk', 'soop'].map(p => {
-    const on = p === 'chzzk' ? settings.autoCollectChzzk : settings.autoCollectSoop;
+  el('collectorStatus').textContent = ['chzzk', 'soop', 'twitch'].map(p => {
+    const on = p === 'chzzk' ? settings.autoCollectChzzk : p === 'soop' ? settings.autoCollectSoop : settings.autoCollectTwitch;
     const state = collectorState[p];
     const campaigns = on ? (state?.campaigns || []).filter(c => c.active && !c.completed) : [];
-    return (p === 'chzzk' ? '치지직: ' : 'SOOP: ') + (!on ? '꺼짐' : state?.status || '확인 중…') +
+    return (p === 'chzzk' ? '치지직: ' : p === 'soop' ? 'SOOP: ' : '트위치: ') + (!on ? '꺼짐' : state?.status || '확인 중…') +
       campaigns.map(c => `\n· ${c.title}: ${c.earned}/${c.total}개 달성`).join('');
   }).join('\n');
 }
@@ -214,6 +214,7 @@ async function loadSettings() {
   const settings = await getSettings();
   el('settingCollectChzzk').checked = settings.autoCollectChzzk;
   el('settingCollectSoop').checked = settings.autoCollectSoop;
+  el('settingCollectTwitch').checked = settings.autoCollectTwitch;
   await renderCollector();
   el('settingLiveMonitor').checked = settings.liveMonitorEnabled;
   el('settingLiveAutoOpen').checked = settings.liveAutoOpen;

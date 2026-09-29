@@ -105,6 +105,16 @@ test('SOOP live URLs accept only strict official broadcast addresses',()=>{
  assert.equal(m.sameLiveUrl(valid[1],valid[0]),true);
  assert.equal(m.sameLiveUrl(valid[0],'https://play.sooplive.co.kr/other/999'),false);
 });
+test('Twitch channel URLs preserve ownership through harmless site parameters but reject other pages',()=>{
+ const channel='https://www.twitch.tv/er_streamer';
+ assert.equal(m.validLiveUrl(channel),true);
+ assert.equal(m.validLiveUrl('https://twitch.tv/er_streamer'),true);
+ assert.equal(m.sameLiveUrl(channel,'https://twitch.tv/ER_STREAMER?referrer=raid'),true);
+ for (const url of ['https://www.twitch.tv/drops/inventory','https://www.twitch.tv/directory',
+   'https://evil.twitch.tv/er_streamer','https://www.twitch.tv:444/er_streamer',
+   'https://www.twitch.tv/other']) assert.equal(m.sameLiveUrl(channel,url),false,url);
+ assert.equal(m.validLiveUrl('https://www.twitch.tv/er_streamer?redirect=other'),false);
+});
 test('SOOP monitor reuses its owned tab after official host redirect',async()=>{
  data.settings.liveAutoOpen=true;chzzk=[];
  await m.checkLiveMonitor();

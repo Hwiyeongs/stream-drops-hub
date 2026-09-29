@@ -1,6 +1,6 @@
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-let data, tabs, actions, details, lives, claims, challenges, missions, soopLives, error, video, beforeFetch;
+let data, tabs, actions, details, lives, claims, challenges, missions, soopLives, twitchLives, error, video, beforeFetch;
 const channel = n => String(n).padStart(32,'a');
 const live = (id, campaign, viewers=10) => ({liveId:id,dropsCampaignNo:campaign,liveCategory:'Black_Survival_Eternal_Return',concurrentUserCount:viewers,channel:{channelId:channel(id),channelName:'방송'+id}});
 const detail = id => ({campaignNo:id,title:'캠페인'+id,categoryId:'Black_Survival_Eternal_Return',startDate:'2020-01-01 00:00:00',endDate:'2099-01-01 00:00:00',rewardList:[{rewardNo:id*10,conditionForMinutes:60,codeRemainingCount:10}]});
@@ -11,11 +11,12 @@ globalThis.chrome={
  tabs:{async get(id){const t=tabs.find(t=>t.id===id);if(!t)throw Error('closed');return t;},async query({url,active,windowId}){return tabs.filter(t=>(!url||(Array.isArray(url)?url:[url]).some(p=>t.url.startsWith(p.split('*')[0])))&&(active===undefined||t.active===active)&&(windowId===undefined||t.windowId===windowId));},async create(v){const t={id:Math.max(0,...tabs.map(t=>t.id))+1,windowId:1,...v};tabs.push(t);actions.push(['create',v]);return t;},async update(id,v){const t=tabs.find(t=>t.id===id);if(v.active)tabs.filter(x=>x.windowId===t.windowId).forEach(x=>x.active=false);Object.assign(t,v);if(v.active&&t.discarded){t.discarded=false;t.status='complete';}actions.push(['update',v]);return t;},async remove(id){tabs=tabs.filter(t=>t.id!==id);actions.push(['remove',id]);}},
  scripting:{async executeScript(){actions.push(['play',video]);return [{result:{state:video}}];}},runtime:{getURL:p=>p},notifications:{async create(){}},
 };
+chrome.storage.session={async get(){return {twitchGqlHeaders:{at:Date.now(),headers:{Authorization:'OAuth test','Client-Integrity':'test'}}};},async remove(){}};
 const {checkCollector,ensureCollectorAlarm,chooseTarget}=await import('../src/services/auto-collector.js');
 const {campaignProgress,soopMissions}=await import('../src/services/collector-plans.js');
 beforeEach(()=>{
- data={settings:{autoCollectChzzk:true,autoCollectSoop:false,chzzkCollectCampaign:'auto'}};tabs=[];actions=[];details=[detail(1),detail(2)];lives=[live(1,1),live(2,1),live(3,2)];claims=[];challenges=[];missions=[];soopLives=[];error=false;video='playing';beforeFetch=null;
- globalThis.fetch=async url=>{
+ data={settings:{autoCollectChzzk:true,autoCollectSoop:false,chzzkCollectCampaign:'auto'}};tabs=[];actions=[];details=[detail(1),detail(2)];lives=[live(1,1),live(2,1),live(3,2)];claims=[];challenges=[];missions=[];soopLives=[];twitchLives=[{node:{id:'stream',viewersCount:10,broadcaster:{login:'streamer'}}}];error=false;video='playing';beforeFetch=null;
+ globalThis.fetch=async (url,options)=>{
    if(beforeFetch)await beforeFetch();if(error)throw Error('offline');
    let body;
    if(url.includes('/info'))body={code:200,content:{dropsCampaignList:details.map(d=>({campaignNo:d.campaignNo,title:d.title}))}};
@@ -25,6 +26,16 @@ beforeEach(()=>{
    else if(url.endsWith('/challenges'))body={code:200,content:{challengeList:challenges}};
    else if(url.includes('get_drops_mission_list'))body={result:1,data:missions};
    else if(url.includes('sch.sooplive'))body={result:1,data:{list:soopLives,is_more:false}};
+   else if(url.includes('gql.twitch.tv')){
+     const {operationName}=JSON.parse(options?.body||'{}');
+     body=operationName==='HubDropsViewer'?{data:{currentUser:{login:'viewer'}}}:
+       operationName==='HubDropsCampaigns'?{data:{currentUser:{dropCampaigns:[{id:'er',name:'이터널리턴 트위치',status:'ACTIVE',startAt:'2020-01-01T00:00:00Z',endAt:'2099-01-01T00:00:00Z',game:{id:'game',slug:'eternal-return',displayName:'Eternal Return'}}]}}}:
+       operationName==='HubDropsInventory'?{data:{currentUser:{inventory:{dropCampaignsInProgress:[{id:'er',timeBasedDrops:[{id:'reward',self:{isClaimed:false,currentMinutesWatched:12}}]}]}}}}:
+       operationName==='HubDropsDetails'?{data:{user:{dropCampaign:{id:'er',name:'이터널리턴 트위치',status:'ACTIVE',startAt:'2020-01-01T00:00:00Z',endAt:'2099-01-01T00:00:00Z',game:{id:'game',slug:'eternal-return',displayName:'Eternal Return'},allow:{channels:[]},timeBasedDrops:[{id:'reward',requiredMinutesWatched:60,self:{isClaimed:false,currentMinutesWatched:12}}]}}}}:
+       operationName==='HubDropsGameLives'?{data:{game:{id:'game',streams:{edges:twitchLives}}}}:null;
+     if(!body)throw Error(operationName);
+     return new Response(JSON.stringify(body));
+   }
    else throw Error(url);
    return new Response(JSON.stringify(body));
  };
@@ -60,6 +71,61 @@ test('server progress is displayed separately from successful playback',async()=
 test('autoplay denial remains retryable without tab thrashing',async()=>{await checkCollector();video='blocked';await checkCollector();await checkCollector();assert.equal(actions.filter(a=>a[0]==='create').length,1);assert.match(data.collectorState.chzzk.status,/재시도/);});
 test('three playback failures cool down failed broadcast and switch',async()=>{await checkCollector();video='stalled';await checkCollector();await checkCollector();await checkCollector();await checkCollector();assert.equal(data.collectorState.chzzk.liveKey,'chzzk:2:1');assert.equal(tabs.length,1);});
 test('SOOP opens actual drops live then switches after ending',async()=>{data.settings.autoCollectChzzk=false;data.settings.autoCollectSoop=true;soopLives=[{broad_no:1,broad_cate_no:'40120',is_drops:1,user_id:'first'}];await checkCollector();assert.equal(tabs[0].url,'https://play.sooplive.com/first/1');soopLives=[{broad_no:2,broad_cate_no:'40120',is_drops:1,user_id:'second'}];await checkCollector();assert.equal(tabs.length,1);assert.equal(tabs[0].url,'https://play.sooplive.com/second/2');});
+test('Twitch automatically opens and mutes an eligible live, then closes only its owned tab when disabled',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
+ tabs.push({id:99,windowId:1,url:'https://example.com',active:true});
+ await checkCollector();
+ const owned=tabs.find(t=>t.id!==99);
+ assert.equal(owned.url,'https://www.twitch.tv/streamer');
+ assert.equal(owned.muted,true);
+ assert.equal(tabs.find(t=>t.id===99).active,true);
+ assert.match(data.collectorState.twitch.status,/서버 시청 12분/);
+ data.settings.autoCollectTwitch=false;
+ await checkCollector();
+ assert.deepEqual(tabs.map(t=>t.id),[99]);
+});
+test('Twitch pauses after user navigation and does not replace a manually opened stream',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
+ tabs.push({id:99,windowId:1,url:'https://www.twitch.tv/another',active:true});
+ await checkCollector();
+ assert.equal(tabs.length,1);
+ assert.match(data.collectorState.twitch.status,/다른 방송 탭/);
+ tabs=[];
+ await checkCollector();
+ tabs[0].url='https://example.com';
+ await checkCollector();
+ assert.equal(data.collectorState.twitch.userStopped,true);
+ assert.equal(tabs[0].url,'https://example.com');
+});
+test('Twitch switches to another real live when server watch minutes remain unchanged',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
+ twitchLives.push({node:{id:'stream-2',viewersCount:5,broadcaster:{login:'backup'}}});
+ await checkCollector();
+ assert.equal(data.collectorState.twitch.liveKey,'twitch:streamer');
+ data.collectorState.twitch.progressAt=Date.now()-11*60000;
+ await checkCollector();
+ assert.match(data.collectorState.twitch.status,/다른 방송으로 전환/);
+ await checkCollector();
+ assert.equal(data.collectorState.twitch.liveKey,'twitch:backup');
+ assert.equal(tabs.length,1);
+ assert.equal(tabs[0].url,'https://www.twitch.tv/backup');
+});
+test('Twitch player control starts muted real video and verifies its clock advances',async()=>{
+ const originalLocation=globalThis.location,originalDocument=globalThis.document;
+ const url='https://www.twitch.tv/streamer';
+ let started=0,clicks=0;
+ const media={paused:true,ended:false,muted:false,defaultMuted:false,readyState:3,networkState:1,
+  get currentTime(){return started ? (Date.now()-started)/1000 : 0;},
+  getBoundingClientRect(){return {width:640,height:360};},clientWidth:640,clientHeight:360,
+  closest:()=>({}),matches:()=>false,async play(){throw Error('play should be handled by site control');}};
+ const button={disabled:false,click(){clicks++;assert.equal(media.muted,true);media.paused=false;started=Date.now();}};
+ globalThis.location={href:url+'?referrer=raid'};
+ globalThis.document={querySelectorAll:()=>[media],querySelector:selector=>selector==='[data-a-target="player-play-pause-button"]'?button:null};
+ try {
+  const result=await (await import('../src/services/auto-collector.js')).controlVideo(url,true,'twitch');
+  assert.equal(result.state,'playing');assert.equal(result.muted,true);assert.equal(clicks,1);assert.ok(result.deltaSeconds>2);
+ } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
+});
 test('SOOP recovers an existing stream in the background without stealing focus',async()=>{
  data.settings.autoCollectChzzk=false;data.settings.autoCollectSoop=true;
  soopLives=[{broad_no:1,broad_cate_no:'40120',is_drops:1,user_id:'first'}];

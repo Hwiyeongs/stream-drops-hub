@@ -1,14 +1,16 @@
 import { dropsDay } from './drops-day.js';
 import { getSettings } from './storage.js';
 import { chzzkPlan, soopPlan } from './collector-plans.js';
+import { twitchPlan } from './twitch-collector-plan.js';
 import { validLiveUrl, sameLiveUrl } from './live-monitor.js';
 
 export const COLLECT_ALARM = 'collectEternalReturnDrops';
-const flag = p => p === 'chzzk' ? 'autoCollectChzzk' : 'autoCollectSoop';
+const PLATFORMS = ['chzzk', 'soop', 'twitch'];
+const flag = p => ({ chzzk: 'autoCollectChzzk', soop: 'autoCollectSoop', twitch: 'autoCollectTwitch' })[p];
 let pending;
 export async function ensureCollectorAlarm() {
   const s = await getSettings();
-  if (!s.autoCollectChzzk && !s.autoCollectSoop) { await chrome.alarms.clear(COLLECT_ALARM); return; }
+  if (!s.autoCollectChzzk && !s.autoCollectSoop && !s.autoCollectTwitch) { await chrome.alarms.clear(COLLECT_ALARM); return; }
   if ((await chrome.alarms.get(COLLECT_ALARM))?.periodInMinutes !== 1) await chrome.alarms.create(COLLECT_ALARM, { periodInMinutes: 1 });
 }
 // Executed only in an extension-created tab still showing the owned broadcast.
@@ -16,6 +18,15 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
   // This function is serialized into the page; imported helpers are unavailable there.
   const sameLocation = current => {
     if (current === expectedUrl) return true;
+    if (platform === 'twitch') {
+      try {
+        const first = new URL(expectedUrl), second = new URL(current);
+        return first.protocol === 'https:' && second.protocol === 'https:' && ['www.twitch.tv', 'twitch.tv'].includes(first.hostname) &&
+          ['www.twitch.tv', 'twitch.tv'].includes(second.hostname) && !second.username && !second.password && !second.port &&
+          /^\/[a-z0-9_]{1,25}\/?$/i.test(first.pathname) &&
+          first.pathname.replace(/\/$/, '').toLowerCase() === second.pathname.replace(/\/$/, '').toLowerCase();
+      } catch { return false; }
+    }
     if (platform !== 'soop') return false;
     try {
       const first = new URL(expectedUrl), second = new URL(current);
@@ -35,7 +46,8 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
     const visible = videos.filter(v => {
       const r = v.getBoundingClientRect(); return r.width > 120 && r.height > 80;
     }).sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight);
-    const primary = platform === 'chzzk' ? videos.find(v => v.matches?.("video[data-role='videoEl']")) : null;
+    const primary = platform === 'chzzk' ? videos.find(v => v.matches?.("video[data-role='videoEl']")) :
+      platform === 'twitch' ? videos.find(v => v.closest?.('[data-a-target="video-player"],.video-player__container,.video-player')) : null;
     // A single player can report zero layout size while its window is occluded.
     return (platform === 'soop' ? document.querySelector('video#livePlayer') : primary) ||
       visible[0] || (videos.length === 1 ? videos[0] : null);
@@ -44,6 +56,15 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
   if (start && platform === 'chzzk' && (!video || video.paused || video.ended)) {
     // The site's own control can initialize the live player before a video exists.
     const playButton = document.querySelector?.('.pzp .pzp-brand-playback-button,.pzp .pzp-playback-switch,[aria-label="video player"] .pzp-brand-playback-button,[aria-label="video player"] .pzp-playback-switch');
+    if (playButton && !playButton.disabled) {
+      if (video) { video.defaultMuted = true; video.muted = true; }
+      playButton.click();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      video = findVideo();
+    }
+  }
+  if (start && platform === 'twitch' && (!video || video.paused || video.ended)) {
+    const playButton = document.querySelector?.('[data-a-target="player-play-pause-button"]');
     if (playButton && !playButton.disabled) {
       if (video) { video.defaultMuted = true; video.muted = true; }
       playButton.click();
@@ -131,7 +152,7 @@ async function startPlayback(session, platform, previousTab, fromBlank = false) 
       } catch { /* Previous tab may have been closed. */ }
     }
   }
-  if (platform === 'chzzk' && playback.state === 'playing' && previousTab?.id !== session.tabId) {
+  if ((platform === 'chzzk' || platform === 'twitch') && playback.state === 'playing' && previousTab?.id !== session.tabId) {
     const tab = await chrome.tabs.get(session.tabId);
     if (!tab.active) {
       // CHZZK may pause as soon as its tab becomes hidden. Verify after restoring
@@ -188,7 +209,7 @@ async function run() {
   const state = collectorState;
   const day = dropsDay();
   if (state.day && state.day !== day) {
-    for (const platform of ['chzzk', 'soop']) {
+    for (const platform of PLATFORMS) {
       const old = state[platform] || {};
       // Keep ownership of a still-open stream; never close a user-navigated tab.
       const tab = await ownedTab(old);
@@ -197,7 +218,7 @@ async function run() {
     }
   }
   state.day = day;
-  for (const platform of ['chzzk', 'soop']) {
+  for (const platform of PLATFORMS) {
     let settings = await getSettings();
     let session = state[platform] || {};
     if (!settings[flag(platform)]) {
@@ -216,7 +237,8 @@ async function run() {
         }
         session.userStopped = true; session.status = '탭을 닫거나 이동하여 일시 중지됨'; await persist(state); continue;
       }
-      const plan = platform === 'chzzk' ? await chzzkPlan(selected) : await soopPlan();
+      const plan = platform === 'chzzk' ? await chzzkPlan(selected) : platform === 'soop' ? await soopPlan() :
+        await twitchPlan(Date.now(), session.liveKey?.startsWith('twitch:') ? session.liveKey.slice(7) : null);
       session.campaigns = plan.campaigns.map(c => ({ id:c.id, title:c.title, completed:c.completed, active:c.active, minutes:c.minutes, earned:c.earned, total:c.total }));
       if (plan.catalog) session.catalog = plan.catalog;
       settings = await getSettings();
@@ -225,14 +247,18 @@ async function run() {
       const target = chooseTarget(plan, session, selected);
       if (!target) {
         await release(session); delete session.tabId; delete session.url;
-        session.status = plan.finished ? '대상 캠페인 완료·종료·보상 소진 · 자동 시청 대기' : '선택한 캠페인의 대상 방송 대기 중';
+        session.status = platform === 'twitch' && plan.needsClaim ? '시청 조건 달성 · 트위치 보상 수령 대기' :
+          platform === 'twitch' && !plan.campaigns.length ? '이터널리턴 트위치 캠페인 대기 중' :
+          plan.finished ? '대상 캠페인 완료·종료·보상 소진 · 자동 시청 대기' : '선택한 캠페인의 대상 방송 대기 중';
         session.checkedAt = Date.now(); await persist(state); continue;
       }
       const { campaign, live } = target;
       if (!validLiveUrl(live.url)) throw new Error('대상 방송 주소가 올바르지 않습니다.');
       let tab = await ownedTab(session);
-      const patterns = platform === 'chzzk' ? ['https://chzzk.naver.com/live/*'] : ['https://play.sooplive.com/*', 'https://play.sooplive.co.kr/*'];
-      const others = (await chrome.tabs.query({ url: patterns })).filter(t => t.id !== tab?.id);
+      const patterns = platform === 'chzzk' ? ['https://chzzk.naver.com/live/*'] : platform === 'soop' ?
+        ['https://play.sooplive.com/*', 'https://play.sooplive.co.kr/*'] : ['https://www.twitch.tv/*', 'https://twitch.tv/*'];
+      const others = (await chrome.tabs.query({ url: patterns })).filter(t => t.id !== tab?.id &&
+        (platform !== 'twitch' || sameLiveUrl(t.pendingUrl || t.url, t.pendingUrl || t.url)));
       if (others.length) {
         await release(session); delete session.tabId; delete session.url;
         session.status = '다른 방송 탭을 닫아 주세요 · 중복 시청으로 적립이 멈출 수 있어 대기 중';
@@ -298,9 +324,18 @@ async function run() {
             session.status = `재생 오류${reason} · 다음 확인에서 다른 대상 방송으로 전환`;
           }
         }
+        if (!Number.isFinite(session.progressAt)) session.progressAt = Date.now();
         if (campaign.minutes !== null && campaign.minutes !== session.lastProgress) { session.lastProgress = campaign.minutes; session.progressAt = Date.now(); }
         if (campaign.minutes !== null) session.status += ` · 서버 시청 ${campaign.minutes}분 (${campaign.earned}/${campaign.total}개 달성)`;
-        if (Date.now() - session.progressAt > 10 * 60000) session.status += ' · 적립 증가 미확인: 로그인/계정 연결/다른 시청 기기를 확인해 주세요';
+        if (platform === 'twitch' && campaign.needsLink) session.status += ' · 게임 계정 연결 권장';
+        if (Date.now() - session.progressAt > 10 * 60000) {
+          session.status += ' · 적립 증가 미확인: 로그인/계정 연결/다른 시청 기기를 확인해 주세요';
+          if (platform === 'twitch' && campaign.minutes !== null && playback.state === 'playing') {
+            session.cooldowns ||= {};
+            session.cooldowns[live.key] = Date.now() + 10 * 60000;
+            session.status += ' · 다음 확인에서 다른 방송으로 전환';
+          }
+        }
       }
       session.checkedAt = Date.now(); session.error = null;
     } catch (error) {
