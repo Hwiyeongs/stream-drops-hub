@@ -61,6 +61,42 @@ test('SOOP recovers an existing stream in the background without stealing focus'
   assert.equal(tabs.find(t=>t.id===99).active,true);
  } finally {chrome.scripting.executeScript=original;}
 });
+test('CHZZK verifies playback after hiding its tab and recovers without taking focus again',async()=>{
+ tabs.push({id:99,windowId:1,url:'https://example.com',active:true});
+ const original=chrome.scripting.executeScript;
+ const calls=[];
+ chrome.scripting.executeScript=async ({args})=>{
+   const owned=tabs.find(t=>t.id!==99);
+   calls.push({start:args[1],active:owned.active});
+   return [{result:{state:owned.active || args[1] ? 'playing' : 'paused',muted:true,deltaSeconds:1}}];
+ };
+ try {
+   await checkCollector();
+   assert.deepEqual(calls.map(c=>[c.start,c.active]),[[true,true],[false,false],[true,false]]);
+   assert.equal(data.collectorState.chzzk.diagnostic.recovery,'background');
+   assert.equal(tabs.find(t=>t.id===99).active,true);
+   assert.match(data.collectorState.chzzk.status,/재생 중/);
+ } finally {chrome.scripting.executeScript=original;}
+});
+test('CHZZK recovers a stream that pauses later without switching tabs',async()=>{
+ tabs.push({id:99,windowId:1,url:'https://example.com',active:true});
+ await checkCollector();
+ data.collectorState.chzzk.lastStartAt=Date.now()-60001;
+ actions=[];
+ const original=chrome.scripting.executeScript;
+ const starts=[];
+ chrome.scripting.executeScript=async ({args})=>{
+   starts.push(args[1]);
+   return [{result:{state:args[1]?'playing':'paused',muted:true,deltaSeconds:args[1]?1:0}}];
+ };
+ try {
+   await checkCollector();
+   assert.deepEqual(starts,[false,true]);
+   assert.equal(actions.some(a=>a[0]==='update'&&a[1].active===true),false);
+   assert.equal(tabs.find(t=>t.id===99).active,true);
+   assert.equal(data.collectorState.chzzk.diagnostic.recovery,'background');
+ } finally {chrome.scripting.executeScript=original;}
+});
 test('SOOP missions must match category, dates, and registered broadcaster',()=>{const rows=[{cateName:'이터널 리턴',title:'미션',dropsType:'B',startDate:'2020-01-01',endDate:'2099-01-01',itemList:[{percent:50,viewTime:30}],broadIdList:[{userId:'a',broadNo:1}]}];const r=soopMissions(rows,[{channelId:'a',liveId:'1'},{channelId:'b',liveId:'2'}]);assert.equal(r[0].lives.length,1);assert.equal(r[0].completed,false);rows[0].itemList[0].percent=100;assert.equal(soopMissions(rows,[])[0].completed,true);});
 test('catalog choice persists when selected campaign temporarily has no live',async()=>{data.settings.chzzkCollectCampaign='2';lives=[live(1,1)];await checkCollector();assert.equal(tabs.length,0);assert.match(data.collectorState.chzzk.status,/대기/);});
 test('one minute collection alarm and disabled cleanup',async()=>{await ensureCollectorAlarm();assert.equal(data.alarm.periodInMinutes,1);data.settings.autoCollectChzzk=false;await ensureCollectorAlarm();assert.equal(data.alarm,undefined);});
@@ -155,6 +191,40 @@ test('controlVideo mutes the media element before the first play',async()=>{
  globalThis.location={href:url};globalThis.document={querySelectorAll:()=>[media]};
  try {const r=await (await import('../src/services/auto-collector.js')).controlVideo(url,true);assert.equal(r.state,'playing');assert.equal(r.muted,true);assert.ok(r.deltaSeconds>0);}
  finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
+});
+test('CHZZK starts its own player when the video has not been created yet',async()=>{
+ const originalLocation=globalThis.location,originalDocument=globalThis.document;
+ const url='https://chzzk.naver.com/live/'+channel(1);
+ let media=null,clicks=0,startedAt=0;
+ const button={disabled:false,click(){clicks++;startedAt=Date.now();media={paused:false,ended:false,muted:false,defaultMuted:false,readyState:4,networkState:1,
+   get currentTime(){return (Date.now()-startedAt)/1000;},
+   getBoundingClientRect(){return {width:640,height:360};},clientWidth:640,clientHeight:360,
+   matches:selector=>selector==="video[data-role='videoEl']",closest:()=>null};}};
+ globalThis.location={href:url};
+ globalThis.document={querySelectorAll:()=>media?[media]:[],querySelector:()=>button};
+ try {
+   const r=await (await import('../src/services/auto-collector.js')).controlVideo(url,true);
+   assert.equal(clicks,1);assert.equal(r.state,'playing');assert.equal(r.muted,true);
+ } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
+});
+test('CHZZK ignores an advertising video and plays the designated live player',async()=>{
+ const originalLocation=globalThis.location,originalDocument=globalThis.document;
+ const url='https://chzzk.naver.com/live/'+channel(1);
+ let startedAt=0,clicks=0;
+ const ad={paused:false,ended:false,currentTime:5,readyState:4,networkState:1,
+   getBoundingClientRect(){return {width:1920,height:1080};},clientWidth:1920,clientHeight:1080,
+   closest:()=>({}),matches:()=>false};
+ const liveVideo={paused:true,ended:false,muted:false,defaultMuted:false,readyState:4,networkState:1,
+   get currentTime(){return startedAt?(Date.now()-startedAt)/1000:0;},
+   getBoundingClientRect(){return {width:640,height:360};},clientWidth:640,clientHeight:360,
+   closest:()=>null,matches:selector=>selector==="video[data-role='videoEl']"};
+ const button={disabled:false,click(){clicks++;liveVideo.paused=false;startedAt=Date.now();}};
+ globalThis.location={href:url};
+ globalThis.document={querySelectorAll:()=>[ad,liveVideo],querySelector:()=>button};
+ try {
+   const r=await (await import('../src/services/auto-collector.js')).controlVideo(url,true);
+   assert.equal(clicks,1);assert.equal(r.state,'playing');assert.equal(r.muted,true);
+ } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
 });
 
 test('SOOP starts its live stream through the site play button, not the initial placeholder',async()=>{

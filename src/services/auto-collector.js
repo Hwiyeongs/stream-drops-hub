@@ -28,13 +28,30 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
     } catch { return false; }
   };
   if (!sameLocation(location.href)) return { state: 'navigation' };
-  const videos = [...document.querySelectorAll('video')];
-  const visible = videos.filter(v => {
-    const r = v.getBoundingClientRect(); return r.width > 120 && r.height > 80;
-  }).sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight);
-  // A single player can report zero layout size while its window is occluded.
-  const video = (platform === 'soop' ? document.querySelector('video#livePlayer') : null) || visible[0] || (videos.length === 1 ? videos[0] : null);
-  if (!video) return { state: 'missing' };
+  const findVideo = () => {
+    // CHZZK can render an ad video beside the actual PZP live player.
+    const videos = [...document.querySelectorAll('video')].filter(v => platform !== 'chzzk' ||
+      !v.closest?.("[data-role='adVideoContainerEl'],[data-role='imaAdContainerEl'],[data-role='gvAdContainerEl'],#midAdVideoContainer,#midAdPlayerWrapper,video[title='Advertisement' i]"));
+    const visible = videos.filter(v => {
+      const r = v.getBoundingClientRect(); return r.width > 120 && r.height > 80;
+    }).sort((a, b) => b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight);
+    const primary = platform === 'chzzk' ? videos.find(v => v.matches?.("video[data-role='videoEl']")) : null;
+    // A single player can report zero layout size while its window is occluded.
+    return (platform === 'soop' ? document.querySelector('video#livePlayer') : primary) ||
+      visible[0] || (videos.length === 1 ? videos[0] : null);
+  };
+  let video = findVideo();
+  if (start && platform === 'chzzk' && (!video || video.paused || video.ended)) {
+    // The site's own control can initialize the live player before a video exists.
+    const playButton = document.querySelector?.('.pzp .pzp-brand-playback-button,.pzp .pzp-playback-switch,[aria-label="video player"] .pzp-brand-playback-button,[aria-label="video player"] .pzp-playback-switch');
+    if (playButton && !playButton.disabled) {
+      if (video) { video.defaultMuted = true; video.muted = true; }
+      playButton.click();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      video = findVideo();
+    }
+  }
+  if (!video) return { state: 'missing', reason: 'PlayerVideoMissing' };
   const result = (state, reason = null, deltaSeconds = 0) => ({
     state, reason, readyState: video.readyState, networkState: video.networkState,
     paused: video.paused, ended: video.ended, muted: video.muted,
@@ -101,12 +118,10 @@ async function startPlayback(session, platform, previousTab, fromBlank = false) 
       } else if (sameLiveUrl(session.url, tab.url)) {
         playback = await probe(session, true, platform);
         session.diagnostic = { platform, ...playback, attempt: attempt + 1, checkedAt: Date.now() };
-        if (playback.state === 'playing') return playback;
-        if (playback.state === 'navigation') return playback;
+        if (playback.state === 'playing' || playback.state === 'navigation') break;
       }
       if (attempt < 7) await new Promise(resolve => setTimeout(resolve, 1000));
     }
-    return playback;
   } finally {
     const [active] = await chrome.tabs.query({ active: true, windowId });
     if (previousTab && previousTab.id !== session.tabId && active?.id === session.tabId) {
@@ -116,6 +131,20 @@ async function startPlayback(session, platform, previousTab, fromBlank = false) 
       } catch { /* Previous tab may have been closed. */ }
     }
   }
+  if (platform === 'chzzk' && playback.state === 'playing' && previousTab?.id !== session.tabId) {
+    const tab = await chrome.tabs.get(session.tabId);
+    if (!tab.active) {
+      // CHZZK may pause as soon as its tab becomes hidden. Verify after restoring
+      // the user's tab, then retry inside the owned tab without changing focus.
+      playback = await probe(session, false, platform);
+      session.diagnostic = { platform, ...playback, attempt: 9, recovery: 'background-check', checkedAt: Date.now() };
+      if (playback.state !== 'playing' && playback.state !== 'navigation') {
+        playback = await probe(session, true, platform);
+        session.diagnostic = { platform, ...playback, attempt: 10, recovery: 'background', checkedAt: Date.now() };
+      }
+    }
+  }
+  return playback;
 }
 async function ownedTab(session) {
   if (!session?.tabId) return null;
@@ -234,9 +263,10 @@ async function run() {
         session.diagnostic = { platform, ...playback, attempt: 0, checkedAt: Date.now() };
         if (playback.state !== 'playing' && playback.state !== 'navigation' &&
             (tab.discarded || Date.now() - (session.lastStartAt || 0) >= 60000)) {
-          if (platform === 'soop' && !tab.discarded) {
+          if (!tab.discarded) {
             // A single background probe can miss a playing stream. Retry the
             // existing player without pulling the user's tab into focus.
+            session.lastStartAt = Date.now();
             playback = await probe(session, true, platform);
             session.diagnostic = { platform, ...playback, attempt: 1, recovery: 'background', checkedAt: Date.now() };
           } else {

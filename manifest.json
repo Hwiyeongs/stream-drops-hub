@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Stream Drops Hub",
-  "version": "1.5.8",
+  "version": "1.5.9",
   "description": "치지직(CHZZK), SOOP, 트위치(Twitch)에서 지금 즉시 수령 가능한 드롭스 보상을 한곳에 모아보고 간편/자동 수령을 제공합니다.",
   "icons": {
     "16": "icons/icon-16.png",
