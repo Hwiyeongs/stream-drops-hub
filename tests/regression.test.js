@@ -94,6 +94,16 @@ test('expiry is KST end-of-day and achievement window is calendar based', () => 
 test('SOOP yearless December date resolves to previous year around New Year', () => {
   assert.equal(parseItemDateValue({ itemName: '[12/31]' }, Date.parse('2027-01-01T10:00:00+09:00')), Date.parse('2026-12-31T00:00:00+09:00'));
 });
+test('expired rewards stay in history and do not return to the claimable list', async () => {
+  const old = { ...coupon('old'), platform: 'soop', itemCodeIdx: 42, expDate: '2020-01-01',
+    couponCode: 'OLD-CODE', receivedAt: Date.parse('2020-01-01T10:00:00+09:00') };
+  data['handled:old'] = { ...old, actionType: 'copied' };
+  data['coupon:42'] = 'OLD-CODE';
+  await worker.initialize();
+  assert.equal((await storage.getHandledDropsLog()).old.couponCode, 'OLD-CODE');
+  assert.equal(data['coupon:42'], 'OLD-CODE');
+  assert.equal(isActiveDrop(old, await storage.getHandledDropsLog()), false);
+});
 test('SOOP bracketed reward date takes priority over an event date range', () => {
   const text = '2026-09-01 ~ 2026-09-30 이벤트 [09/27] 보상';
   assert.equal(parseItemDateValue({ itemName: text, sendDate: '2026-09-29' }), Date.parse('2026-09-27T00:00:00+09:00'));

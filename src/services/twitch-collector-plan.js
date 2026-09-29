@@ -80,10 +80,11 @@ export function summarizeTwitchCampaign(detail, inventory, now = Date.now(), awa
   const claimable = drops.some(d => !d.self?.isClaimed && required(d) > 0 && watched(d) >= required(d));
   const needsLink = detail.self?.isAccountConnected === false;
   // A completed tier often needs claiming before Twitch advances the next one.
-  const watchable = !claimable && !verificationPending && drops.some(d => !d.self?.isClaimed && required(d) > watched(d));
+  const canWatch = drops.some(d => !d.self?.isClaimed && required(d) > watched(d));
+  const watchable = !claimable && !verificationPending && canWatch;
   const minutes = drops.length ? drops.reduce((sum, drop) => sum + watched(drop), 0) : null;
   return { id: String(detail.id), title: String(detail.name || '트위치 이터널리턴 드롭스'), active,
-    completed: drops.length > 0 && earned === drops.length, watchable, claimable, needsLink, minutes, verificationPending,
+    completed: drops.length > 0 && earned === drops.length, canWatch, watchable, claimable, needsLink, minutes, verificationPending,
     earned, total: drops.length, endAt, game: detail.game,
     restricted: detail.allow?.isEnabled === true || (detail.allow?.isEnabled !== false && (detail.allow?.channels?.length || 0) > 0),
     allowed: detail.allow?.channels || [], lives: [] };
@@ -191,7 +192,7 @@ export async function twitchPlan(now = Date.now(), currentChannel = null) {
     if (override.mode === 'completed') Object.assign(campaign, { manualCompleted: true, completed: true,
       earned: campaign.total, watchable: false, claimable: false, verificationPending: false });
     if (override.mode === 'watch') Object.assign(campaign, { manualWatch: true,
-      watchable: !campaign.completed && !campaign.claimable, verificationPending: false });
+      watchable: campaign.canWatch && !campaign.completed && !campaign.claimable, verificationPending: false });
   }
   const liveQueries = new Map();
   for (const campaign of campaigns.filter(c => c.active && c.watchable)) {

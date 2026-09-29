@@ -150,6 +150,16 @@ test('a local watch choice allows a confirmed unclaimed campaign after award loo
   assert.equal(plan.candidates.length, 1);
 });
 
+test('a local watch choice cannot open a stream without a tier requiring watch time', async () => {
+  const tier = pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0];
+  tier.requiredMinutesWatched = 0;
+  tier.self = { isClaimed: false, currentMinutesWatched: 0 };
+  localData.twitchCampaignOverrides = { 'viewer:er-1': { mode: 'watch', endAt: Date.parse(campaign().endAt) } };
+  const plan = await twitchPlan();
+  assert.equal(plan.campaigns[0].canWatch, false);
+  assert.equal(plan.candidates.length, 0);
+});
+
 test('rejected optional award query leaves ordinary Twitch campaign progress usable', async () => {
   pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress = [];
   const tier = pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0];

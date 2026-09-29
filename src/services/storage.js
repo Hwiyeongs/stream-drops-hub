@@ -88,23 +88,8 @@ export function isRecentDate(value, now = Date.now()) {
 }
 export async function getHandledDropsLog() {
   const data = await chrome.storage.local.get(null);
-  return Object.fromEntries(Object.entries(data).filter(([key, entry]) => {
-    if (!key.startsWith(HANDLED)) return false;
-    const expiry = parseExpTimestamp(entry?.expDate);
-    return expiry === null || expiry >= Date.now();
-  }).map(([key, entry]) => [key.slice(HANDLED.length), entry]));
-}
-export async function purgeExpiredHandledDrops() {
-  const data = await chrome.storage.local.get(null), keys = [];
-  for (const [key, entry] of Object.entries(data)) {
-    if (!key.startsWith(HANDLED)) continue;
-    const expiry = parseExpTimestamp(entry.expDate);
-    if (expiry !== null && expiry < Date.now()) {
-      keys.push(key);
-      if (entry.platform === 'soop' && entry.itemCodeIdx != null) keys.push(COUPON + entry.itemCodeIdx);
-    }
-  }
-  if (keys.length) await chrome.storage.local.remove(keys);
+  return Object.fromEntries(Object.entries(data).filter(([key]) => key.startsWith(HANDLED))
+    .map(([key, entry]) => [key.slice(HANDLED.length), entry]));
 }
 export async function recordHandledDrop(drop, actionType = 'claimed') {
   if (!drop?.id) throw new Error('보상 ID가 없습니다.');
