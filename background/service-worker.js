@@ -138,6 +138,24 @@ export async function handleMessage(message) {
       return { success: true };
     }
     case 'UPDATE_SETTINGS': return updateSettings(message.settings);
+    case 'SET_TWITCH_CAMPAIGN_OVERRIDE': {
+      if (typeof message.id !== 'string' || !message.id || message.id.length > 120 ||
+          !['completed', 'watch', 'auto'].includes(message.mode)) throw new Error('트위치 캠페인 선택이 올바르지 않습니다.');
+      const { collectorState = {}, twitchCampaignOverrides = {} } = await chrome.storage.local.get(['collectorState', 'twitchCampaignOverrides']);
+      const session = collectorState.twitch;
+      const campaign = session?.campaigns?.find(c => c.id === message.id && c.active);
+      if (!campaign || !/^[a-z0-9_]{1,25}$/i.test(session.account || '') ||
+          !Number.isFinite(campaign.endAt) || !Number.isFinite(session.campaignsCheckedAt) ||
+          Date.now() - session.campaignsCheckedAt > 3 * 60000) throw new Error('현재 트위치 캠페인 목록을 다시 확인해 주세요.');
+      const overrides = twitchCampaignOverrides && typeof twitchCampaignOverrides === 'object' &&
+        !Array.isArray(twitchCampaignOverrides) ? { ...twitchCampaignOverrides } : {};
+      const key = `${session.account}:${campaign.id}`;
+      if (message.mode === 'auto') delete overrides[key];
+      else overrides[key] = { endAt: campaign.endAt, mode: message.mode, markedAt: Date.now() };
+      await chrome.storage.local.set({ twitchCampaignOverrides: overrides });
+      await checkCollector(true);
+      return { success: true };
+    }
     case 'CLAIM_ALL': {
       const existing = (await chrome.storage.local.get('batchJob')).batchJob;
       if (existing?.status === 'running') return existing;

@@ -268,7 +268,11 @@ async function run() {
       }
       const plan = platform === 'chzzk' ? await chzzkPlan(selected) : platform === 'soop' ? await soopPlan() :
         await twitchPlan(Date.now(), session.liveKey?.startsWith('twitch:') ? session.liveKey.slice(7) : null);
-      session.campaigns = plan.campaigns.map(c => ({ id:c.id, title:c.title, completed:c.completed, active:c.active, minutes:c.minutes, earned:c.earned, total:c.total }));
+      if (platform === 'twitch') session.account = plan.login;
+      session.campaigns = plan.campaigns.map(c => ({ id:c.id, title:c.title, completed:c.completed, active:c.active,
+        minutes:c.minutes, earned:c.earned, total:c.total, endAt:c.endAt,
+        verificationPending:c.verificationPending || false, manualCompleted:c.manualCompleted || false,
+        manualWatch:c.manualWatch || false }));
       session.campaignsCheckedAt = Date.now();
       session.error = null;
       if (plan.catalog) session.catalog = plan.catalog;
@@ -284,7 +288,10 @@ async function run() {
       if (!target) {
         await release(session); delete session.tabId; delete session.url;
         session.status = platform === 'twitch' && plan.needsClaim ? '시청 조건 달성 · 트위치 보상 수령 대기' :
+          platform === 'twitch' && plan.needsVerification ? '트위치 수령 여부 확인 대기 · 중복 시청 방지를 위해 자동 시청 보류' :
           platform === 'twitch' && !plan.campaigns.length ? '이터널리턴 트위치 캠페인 대기 중' :
+          plan.finished && platform === 'twitch' && plan.campaigns.some(c => c.manualCompleted) ?
+            '직접 완료로 표시한 캠페인 포함 · 자동 시청 대기' :
           plan.finished ? '대상 캠페인 완료·종료·보상 소진 · 자동 시청 대기' : '선택한 캠페인의 대상 방송 대기 중';
         session.checkedAt = Date.now(); await persist(state); continue;
       }

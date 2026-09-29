@@ -28,8 +28,45 @@ async function renderCollector() {
     const status = !on ? '꺼짐' : state?.error ? state.status : !fresh ?
       (state?.userStopped ? '자동 시청 일시 중지됨 · 보관함 재확인 대기' : '보관함 재확인 대기') : state?.status || '확인 중…';
     return (p === 'chzzk' ? '치지직: ' : p === 'soop' ? 'SOOP: ' : '트위치: ') + status +
-      campaigns.map(c => `\n· ${c.title}: ${c.earned}/${c.total}개 달성`).join('');
+      campaigns.map(c => `\n· ${c.title}: ${c.verificationPending ? '수령 여부 확인 중' : `${c.earned}/${c.total}개 달성${c.manualWatch ? ' · 직접 미수령 확인' : ''}`}`).join('');
   }).join('\n');
+  const twitch = collectorState.twitch;
+  const fresh = Number.isFinite(twitch?.campaignsCheckedAt) && Date.now() - twitch.campaignsCheckedAt < 3 * 60000;
+  const controls = el('twitchCampaignControls');
+  controls.replaceChildren();
+  if (settings.autoCollectTwitch && fresh && !twitch?.error) {
+    for (const campaign of twitch?.campaigns || []) {
+      if (!campaign.active || (campaign.completed && !campaign.manualCompleted)) continue;
+      const row = document.createElement('div');
+      row.className = 'twitch-campaign-control';
+      const label = document.createElement('span');
+      label.textContent = campaign.title;
+      const buttons = document.createElement('div');
+      buttons.className = 'twitch-campaign-buttons';
+      const addButton = (text, mode) => {
+        const button = document.createElement('button');
+        button.className = 'collector-refresh';
+        button.type = 'button';
+        button.textContent = text;
+        button.dataset.campaignId = campaign.id;
+        button.dataset.mode = mode;
+        buttons.append(button);
+      };
+      if (campaign.manualCompleted || campaign.manualWatch) addButton('자동 판정으로', 'auto');
+      else {
+        addButton('이미 수령함', 'completed');
+        if (campaign.verificationPending) addButton('미수령 · 시청', 'watch');
+      }
+      row.append(label, buttons);
+      controls.append(row);
+    }
+    if (controls.childElementCount) {
+      const note = document.createElement('p');
+      note.className = 'setting-desc';
+      note.textContent = '공식 캠페인과 인벤토리에서 확인한 상태를 선택하세요. 수동 판정은 이 브라우저에만 저장되며 취소할 수 있습니다.';
+      controls.prepend(note);
+    }
+  }
 }
 function enableSettingControls() {
   settingIds.map(el).forEach(c => { c.disabled = settingsBusy; });
@@ -239,6 +276,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('refreshCampaigns').disabled = true;
     try { await request('GET_COLLECTOR_CATALOG'); await renderCollector(); } catch (error) { toast(error.message, 'error'); }
     finally { el('refreshCampaigns').disabled = false; }
+  });
+  el('twitchCampaignControls').addEventListener('click', async event => {
+    const button = event.target.closest('button[data-campaign-id]');
+    if (!button || button.disabled) return;
+    button.disabled = true;
+    try {
+      await request('SET_TWITCH_CAMPAIGN_OVERRIDE', { id: button.dataset.campaignId,
+        mode: button.dataset.mode });
+      await renderCollector();
+      toast('트위치 캠페인 표시를 갱신했습니다.', 'success');
+    } catch (error) { toast(error.message, 'error'); button.disabled = false; }
   });
   el('refreshBtn').addEventListener('click', refresh);
   el('claimAllBtn').addEventListener('click', async () => {

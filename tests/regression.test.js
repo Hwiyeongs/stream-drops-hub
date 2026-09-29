@@ -241,6 +241,19 @@ test('settings change recreates alarm and rejects unsupported interval', async (
   assert.equal(alarms.get('checkDropsAlarm').periodInMinutes, 5);
   await assert.rejects(worker.handleMessage({ type: 'UPDATE_SETTINGS', settings: { pollingIntervalMinutes: 0 } }));
 });
+test('manual Twitch campaign choices are validated, scoped, and reversible', async () => {
+  data.collectorState = { twitch: { account: 'viewer', campaignsCheckedAt: Date.now(),
+    campaigns: [{ id: 'campaign-1', active: true, endAt: Date.parse('2099-01-01T00:00:00Z') }] } };
+  await assert.rejects(worker.handleMessage({ type: 'SET_TWITCH_CAMPAIGN_OVERRIDE', id: 'other', mode: 'completed' }), /다시 확인/);
+  await assert.rejects(worker.handleMessage({ type: 'SET_TWITCH_CAMPAIGN_OVERRIDE', id: 'campaign-1', mode: 'invalid' }), /올바르지/);
+  assert.equal(data.twitchCampaignOverrides, undefined);
+  await worker.handleMessage({ type: 'SET_TWITCH_CAMPAIGN_OVERRIDE', id: 'campaign-1', mode: 'completed' });
+  assert.equal(data.twitchCampaignOverrides['viewer:campaign-1'].mode, 'completed');
+  data.collectorState.twitch = { account: 'viewer', campaignsCheckedAt: Date.now(),
+    campaigns: [{ id: 'campaign-1', active: true, endAt: Date.parse('2099-01-01T00:00:00Z') }] };
+  await worker.handleMessage({ type: 'SET_TWITCH_CAMPAIGN_OVERRIDE', id: 'campaign-1', mode: 'auto' });
+  assert.equal(data.twitchCampaignOverrides['viewer:campaign-1'], undefined);
+});
 test('failed refresh keeps cached SOOP cards stale, with claims disabled', async () => {
   const old = { ...coupon('soop'), platform: 'soop' };
   await storage.saveCachedDrops([old], {}); soopHtml = true;

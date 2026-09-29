@@ -1,6 +1,6 @@
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-let data, tabs, actions, details, lives, claims, challenges, missions, soopLives, twitchLives, twitchClaimed, error, video, beforeFetch;
+let data, tabs, actions, details, lives, claims, challenges, missions, soopLives, twitchLives, twitchClaimed, twitchAwards, twitchMinutes, error, video, beforeFetch;
 const channel = n => String(n).padStart(32,'a');
 const live = (id, campaign, viewers=10) => ({liveId:id,dropsCampaignNo:campaign,liveCategory:'Black_Survival_Eternal_Return',concurrentUserCount:viewers,channel:{channelId:channel(id),channelName:'방송'+id}});
 const detail = id => ({campaignNo:id,title:'캠페인'+id,categoryId:'Black_Survival_Eternal_Return',startDate:'2020-01-01 00:00:00',endDate:'2099-01-01 00:00:00',rewardList:[{rewardNo:id*10,conditionForMinutes:60,codeRemainingCount:10}]});
@@ -15,7 +15,7 @@ chrome.storage.session={async get(){return {twitchGqlHeaders:{at:Date.now(),head
 const {checkCollector,ensureCollectorAlarm,chooseTarget}=await import('../src/services/auto-collector.js');
 const {campaignProgress,soopMissions}=await import('../src/services/collector-plans.js');
 beforeEach(()=>{
- data={settings:{autoCollectChzzk:true,autoCollectSoop:false,chzzkCollectCampaign:'auto'}};tabs=[];actions=[];details=[detail(1),detail(2)];lives=[live(1,1),live(2,1),live(3,2)];claims=[];challenges=[];missions=[];soopLives=[];twitchLives=[{node:{id:'stream',viewersCount:10,broadcaster:{login:'streamer'}}}];twitchClaimed=false;error=false;video='playing';beforeFetch=null;
+ data={settings:{autoCollectChzzk:true,autoCollectSoop:false,chzzkCollectCampaign:'auto'}};tabs=[];actions=[];details=[detail(1),detail(2)];lives=[live(1,1),live(2,1),live(3,2)];claims=[];challenges=[];missions=[];soopLives=[];twitchLives=[{node:{id:'stream',viewersCount:10,broadcaster:{login:'streamer'}}}];twitchClaimed=false;twitchAwards=[];twitchMinutes=12;error=false;video='playing';beforeFetch=null;
  globalThis.fetch=async (url,options)=>{
    if(beforeFetch)await beforeFetch();if(error)throw Error('offline');
    let body;
@@ -30,8 +30,9 @@ beforeEach(()=>{
      const {operationName}=JSON.parse(options?.body||'{}');
      body=operationName==='HubDropsViewer'?{data:{currentUser:{login:'viewer'}}}:
        operationName==='HubDropsCampaigns'?{data:{currentUser:{dropCampaigns:[{id:'er',name:'이터널리턴 트위치',status:'ACTIVE',startAt:'2020-01-01T00:00:00Z',endAt:'2099-01-01T00:00:00Z',game:{id:'game',slug:'eternal-return',displayName:'Eternal Return'}}]}}}:
-       operationName==='HubDropsInventory'?{data:{currentUser:{inventory:{gameEventDrops:[],dropCampaignsInProgress:twitchClaimed?[]:[{id:'er',timeBasedDrops:[{id:'reward',self:{isClaimed:false,currentMinutesWatched:12}}]}]}}}}:
-       operationName==='HubDropsDetails'?{data:{user:{dropCampaign:{id:'er',name:'이터널리턴 트위치',status:'ACTIVE',startAt:'2020-01-01T00:00:00Z',endAt:'2099-01-01T00:00:00Z',game:{id:'game',slug:'eternal-return',displayName:'Eternal Return'},allow:{channels:[]},timeBasedDrops:[{id:'reward',requiredMinutesWatched:60,self:{isClaimed:twitchClaimed,currentMinutesWatched:12}}]}}}}:
+       operationName==='HubDropsInventory'?{data:{currentUser:{inventory:{dropCampaignsInProgress:twitchClaimed?[]:[{id:'er',timeBasedDrops:[{id:'reward',self:{isClaimed:false,currentMinutesWatched:twitchMinutes}}]}]}}}}:
+       operationName==='Inventory'?{data:{currentUser:{inventory:{gameEventDrops:twitchAwards}}}}:
+       operationName==='HubDropsDetails'?{data:{user:{dropCampaign:{id:'er',name:'이터널리턴 트위치',status:'ACTIVE',startAt:'2020-01-01T00:00:00Z',endAt:'2099-01-01T00:00:00Z',game:{id:'game',slug:'eternal-return',displayName:'Eternal Return'},allow:{channels:[]},timeBasedDrops:[{id:'reward',requiredMinutesWatched:60,benefitEdges:[{benefit:{id:'token'}}],self:{isClaimed:twitchClaimed,currentMinutesWatched:twitchMinutes}}]}}}}:
        operationName==='HubDropsGameLives'?{data:{game:{id:'game',streams:{edges:twitchLives}}}}:null;
      if(!body)throw Error(operationName);
      return new Response(JSON.stringify(body));
@@ -102,6 +103,32 @@ test('Twitch automatically opens and mutes an eligible live, then closes only it
  data.settings.autoCollectTwitch=false;
  await checkCollector();
  assert.deepEqual(tabs.map(t=>t.id),[99]);
+});
+test('Twitch does not treat an aggregate award as proof of a claimed campaign',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
+ twitchMinutes=0;twitchAwards=[{id:'token',lastAwardedAt:new Date().toISOString()}];
+ await checkCollector();
+ assert.equal(tabs.length,0);
+ assert.equal(data.collectorState.twitch.campaigns[0].completed,false);
+ assert.equal(data.collectorState.twitch.campaigns[0].verificationPending,true);
+ assert.match(data.collectorState.twitch.status,/수령 여부 확인 대기/);
+});
+test('Twitch local completed choice prevents opening the already-claimed campaign',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
+ twitchMinutes=0;
+ data.twitchCampaignOverrides={'viewer:er':{mode:'completed',endAt:Date.parse('2099-01-01T00:00:00Z')}};
+ await checkCollector();
+ assert.equal(tabs.length,0);
+ assert.equal(data.collectorState.twitch.campaigns[0].manualCompleted,true);
+ assert.equal(data.collectorState.twitch.campaigns[0].completed,true);
+});
+test('Twitch waits instead of opening a stream when zero progress cannot be checked against awards',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
+ twitchMinutes=0;twitchAwards=null;
+ await checkCollector();
+ assert.equal(tabs.length,0);
+ assert.equal(data.collectorState.twitch.campaigns[0].verificationPending,true);
+ assert.match(data.collectorState.twitch.status,/수령 여부 확인 대기/);
 });
 test('Twitch pauses after user navigation and does not replace a manually opened stream',async()=>{
  data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
