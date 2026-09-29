@@ -33,6 +33,24 @@ test('campaign-specific selection never opens another campaign',async()=>{data.s
 test('offline broadcast switches within same campaign using one owned tab',async()=>{await checkCollector();const id=tabs[0].id;lives=[live(2,1),live(3,2,999)];await checkCollector();assert.equal(tabs.length,1);assert.equal(tabs[0].id,id);assert.equal(data.collectorState.chzzk.campaignId,'1');assert.equal(data.collectorState.chzzk.liveKey,'chzzk:2:1');});
 test('completed campaign moves to next and closes own tab after all complete',async()=>{await checkCollector();claims=[{rewardNo:10}];await checkCollector();assert.equal(data.collectorState.chzzk.campaignId,'2');claims.push({rewardNo:20});await checkCollector();assert.equal(tabs.length,0);assert.match(data.collectorState.chzzk.status,/완료/);});
 test('completion is not inferred from missing progress or watch timer',()=>{const c=campaignProgress(detail(1),[],[{rewardNo:10,accumWatchMinutes:60}]);assert.equal(c.completed,false);assert.equal(c.minutes,60);assert.equal(campaignProgress(detail(1),[],[]).completed,false);});
+test('string zero stock is exhausted, but an unknown stock count remains watchable',()=>{
+ const campaign=detail(1);
+ campaign.rewardList[0].codeRemainingCount='0';
+ assert.equal(campaignProgress(campaign,[],[]).watchable,false);
+ campaign.rewardList[0].codeRemainingCount='';
+ assert.equal(campaignProgress(campaign,[],[]).watchable,true);
+ delete campaign.rewardList[0].codeRemainingCount;
+ assert.equal(campaignProgress(campaign,[],[]).watchable,true);
+});
+test('another active campaign can play while every live in the current campaign cools down',()=>{
+ const current={id:'1',lives:[{key:'chzzk:1:1',viewers:20}]};
+ const next={id:'2',lives:[{key:'chzzk:2:2',viewers:10}]};
+ const now=Date.now();
+ const session={campaignId:'1',cooldowns:{'chzzk:1:1':now+60000}};
+ assert.equal(chooseTarget({candidates:[current,next]},session,'auto',now)?.campaign.id,'2');
+ assert.equal(chooseTarget({candidates:[current,next]},{campaignId:'1'},'auto',now)?.campaign.id,'1');
+ assert.equal(chooseTarget({candidates:[current]},session,'1',now),null);
+});
 test('API failure preserves current tab and never declares complete',async()=>{await checkCollector();error=true;await checkCollector();assert.equal(tabs.length,1);assert.match(data.collectorState.chzzk.status,/실패/);});
 test('turning off removes only owned tab',async()=>{await checkCollector();tabs.push({id:9,url:'https://example.com'});data.settings.autoCollectChzzk=false;await checkCollector();assert.deepEqual(tabs.map(t=>t.id),[9]);});
 test('user closed or navigated tab pauses without reopening',async()=>{await checkCollector();tabs[0].url='https://example.com';await checkCollector();assert.equal(tabs.length,1);assert.equal(data.collectorState.chzzk.userStopped,true);data.settings.autoCollectChzzk=false;await checkCollector();assert.equal(tabs.length,1);});
@@ -98,6 +116,12 @@ test('CHZZK recovers a stream that pauses later without switching tabs',async()=
  } finally {chrome.scripting.executeScript=original;}
 });
 test('SOOP missions must match category, dates, and registered broadcaster',()=>{const rows=[{cateName:'이터널 리턴',title:'미션',dropsType:'B',startDate:'2020-01-01',endDate:'2099-01-01',itemList:[{percent:50,viewTime:30}],broadIdList:[{userId:'a',broadNo:1}]}];const r=soopMissions(rows,[{channelId:'a',liveId:'1'},{channelId:'b',liveId:'2'}]);assert.equal(r[0].lives.length,1);assert.equal(r[0].completed,false);rows[0].itemList[0].percent=100;assert.equal(soopMissions(rows,[])[0].completed,true);});
+test('SOOP percent strings mark only fully watched missions complete',()=>{
+ const row={cateName:'이터널 리턴',title:'미션',dropsType:'C',startDate:'2020-01-01',endDate:'2099-01-01',itemList:[{percent:'100%'},{percent:'99,5%'}]};
+ assert.deepEqual(soopMissions([row],[]).map(({completed,earned})=>({completed,earned})),[{completed:false,earned:1}]);
+ row.itemList[1].percent='100 %';
+ assert.equal(soopMissions([row],[])[0].completed,true);
+});
 test('catalog choice persists when selected campaign temporarily has no live',async()=>{data.settings.chzzkCollectCampaign='2';lives=[live(1,1)];await checkCollector();assert.equal(tabs.length,0);assert.match(data.collectorState.chzzk.status,/대기/);});
 test('one minute collection alarm and disabled cleanup',async()=>{await ensureCollectorAlarm();assert.equal(data.alarm.periodInMinutes,1);data.settings.autoCollectChzzk=false;await ensureCollectorAlarm();assert.equal(data.alarm,undefined);});
 
@@ -191,6 +215,27 @@ test('controlVideo mutes the media element before the first play',async()=>{
  globalThis.location={href:url};globalThis.document={querySelectorAll:()=>[media]};
  try {const r=await (await import('../src/services/auto-collector.js')).controlVideo(url,true);assert.equal(r.state,'playing');assert.equal(r.muted,true);assert.ok(r.deltaSeconds>0);}
  finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
+});
+test('follow-up setting change still runs after an uncaught cycle failure',async()=>{
+ const original=chrome.storage.local.get;
+ let entered,unblock;
+ const began=new Promise(resolve=>{entered=resolve;});
+ const gate=new Promise(resolve=>{unblock=resolve;});
+ let failed=false;
+ chrome.storage.local.get=async function(key){
+  if(key==='collectorState'&&!failed){failed=true;entered();await gate;throw Error('storage temporarily unavailable');}
+  return original.call(this,key);
+ };
+ try {
+  const first=checkCollector();
+  const rejection=assert.rejects(first,/storage temporarily unavailable/);
+  await began;
+  const followUp=checkCollector(true);
+  unblock();
+  await rejection;
+  await followUp;
+  assert.equal(tabs.length,1);
+ } finally {chrome.storage.local.get=original;}
 });
 test('CHZZK starts its own player when the video has not been created yet',async()=>{
  const originalLocation=globalThis.location,originalDocument=globalThis.document;

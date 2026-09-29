@@ -94,6 +94,11 @@ test('expiry is KST end-of-day and achievement window is calendar based', () => 
 test('SOOP yearless December date resolves to previous year around New Year', () => {
   assert.equal(parseItemDateValue({ itemName: '[12/31]' }, Date.parse('2027-01-01T10:00:00+09:00')), Date.parse('2026-12-31T00:00:00+09:00'));
 });
+test('SOOP bracketed reward date takes priority over an event date range', () => {
+  const text = '2026-09-01 ~ 2026-09-30 이벤트 [09/27] 보상';
+  assert.equal(parseItemDateValue({ itemName: text, sendDate: '2026-09-29' }), Date.parse('2026-09-27T00:00:00+09:00'));
+  assert.equal(parseItemDateValue({ itemName: '2026-09-01 이벤트 [2026-09-27] 보상' }), Date.parse('2026-09-27T00:00:00+09:00'));
+});
 test('SOOP rejects HTML login response instead of reporting empty success', async () => {
   soopHtml = true;
   const result = await fetchSoopDrops();

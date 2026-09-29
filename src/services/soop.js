@@ -17,8 +17,8 @@ export function parseItemDateValue(item, now = Date.now()) {
   const field = item.sendDate || item.regDate || item.registDate || item.createDate || item.date;
   const fieldTime = parseTimestamp(field);
   const text = [item.itemName, item.title].filter(Boolean).join(' ');
-  const full = text.match(/(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
-  if (full) return parseTimestamp(full[1] + '-' + full[2] + '-' + full[3]);
+  const bracketFull = text.match(/(?:\[|\()(\d{4})[./-](\d{1,2})[./-](\d{1,2})(?:\]|\))/);
+  if (bracketFull) return parseTimestamp(bracketFull[1] + '-' + bracketFull[2] + '-' + bracketFull[3]);
   const short = text.match(/(?:\[|\()(\d{1,2})[./-](\d{1,2})(?:\]|\))/);
   if (short) {
     const year = new Date((fieldTime ?? now) + 9 * 3600000).getUTCFullYear();
@@ -27,6 +27,8 @@ export function parseItemDateValue(item, now = Date.now()) {
     if (fieldTime === null && result !== null && result > now + 86400000) result = parseTimestamp((year - 1) + '-' + short[1] + '-' + short[2]);
     return result;
   }
+  const full = text.match(/(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
+  if (full) return parseTimestamp(full[1] + '-' + full[2] + '-' + full[3]);
   return fieldTime;
 }
 

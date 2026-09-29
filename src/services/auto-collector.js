@@ -170,8 +170,10 @@ async function release(session) {
 export function chooseTarget(plan, session, selected, now = Date.now()) {
   const choices = plan.candidates.filter(c => c.lives.length);
   const current = choices.find(c => c.id === session?.campaignId);
-  // Finish the selected campaign before moving on, even if viewer counts change.
-  const campaign = current || choices[0];
+  // Stay on the current campaign while a broadcaster is available. A cooled-down
+  // campaign must not block another active campaign from earning watch time.
+  const campaign = [current, ...choices.filter(c => c !== current)].find(c =>
+    c?.lives.some(l => (session?.cooldowns?.[l.key] || 0) <= now));
   if (!campaign) {
     if (plan.discoveryLives?.length) return { campaign: { id: 'discovery', title: 'SOOP 미션 참여 확인 중', minutes: null }, live: plan.discoveryLives.find(l => l.key === session?.liveKey) || plan.discoveryLives[0] };
     return null;
@@ -310,7 +312,7 @@ async function run() {
   }
 }
 export function checkCollector(afterCurrent = false) {
-  if (pending) return afterCurrent ? pending.then(() => checkCollector()) : pending;
+  if (pending) return afterCurrent ? pending.catch(() => {}).then(() => checkCollector()) : pending;
   pending = run().finally(() => { pending = null; });
   return pending;
 }

@@ -21,7 +21,8 @@ export function campaignProgress(detail, claims, challenges, now = Date.now()) {
   const earned = new Set(claims.map(r => String(r.rewardNo)));
   const rewards = detail.rewardList;
   const completed = rewards.every(r => earned.has(String(r.rewardNo)));
-  const watchable = rewards.some(r => !earned.has(String(r.rewardNo)) && r.codeRemainingCount !== 0);
+  const watchable = rewards.some(r => !earned.has(String(r.rewardNo)) &&
+    !(r.codeRemainingCount != null && String(r.codeRemainingCount).trim() !== '' && Number(r.codeRemainingCount) === 0));
   const start = parseTimestamp(detail.startDate), end = parseTimestamp(detail.endDate);
   const active = start !== null && end !== null && start <= now && now < end && !detail.dropsCampaignNotStarted;
   const progress = challenges.filter(r => rewards.some(d => String(d.rewardNo) === String(r.rewardNo)));
@@ -46,16 +47,21 @@ export async function chzzkPlan(selected = 'auto') {
   return { catalog, campaigns, candidates: pending, finished: campaigns.length > 0 && campaigns.every(c => c.completed || !c.active || !c.watchable) };
 }
 const isER = value => typeof value === 'string' && ['이터널리턴', 'eternalreturn'].includes(value.replace(/\s/g, '').toLowerCase());
+const percentValue = value => {
+  const text = String(value ?? '').trim();
+  const match = text.match(/^(\d+(?:[.,]\d+)?)\s*%?$/);
+  return match ? Number(match[1].replace(',', '.')) : 0;
+};
 export function soopMissions(rows, lives, now = Date.now()) {
   return rows.filter(r => isER(r.cateName)).map(r => {
     if (!Array.isArray(r.itemList)) throw new Error('SOOP 미션 목록 형식이 변경되었습니다.');
     const start = parseTimestamp(r.startDate), end = parseTimestamp(r.endDate);
     const items = r.itemList;
-    const completed = items.length > 0 && items.every(i => Number(i.percent) >= 100);
+    const completed = items.length > 0 && items.every(i => percentValue(i.percent) >= 100);
     const allowed = r.dropsType === 'C' ? lives : lives.filter(l => Array.isArray(r.broadIdList) && r.broadIdList.some(b => b.userId === l.channelId && String(b.broadNo) === l.liveId));
     return { id: String(r.dropsIdx ?? r.title) + ':' + r.startDate, title: String(r.title || '이터널리턴 SOOP 드롭스'),
       active: start !== null && end !== null && start <= now && now < end, completed, endAt: end,
-      total: items.length, earned: items.filter(i => Number(i.percent) >= 100).length,
+      total: items.length, earned: items.filter(i => percentValue(i.percent) >= 100).length,
       minutes: items.length ? Math.max(...items.map(i => Number(i.viewTime) || 0)) : null, lives: allowed };
   });
 }
