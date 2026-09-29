@@ -23,7 +23,9 @@ async function renderCollector() {
   el('collectorStatus').textContent = ['chzzk', 'soop'].map(p => {
     const on = p === 'chzzk' ? settings.autoCollectChzzk : settings.autoCollectSoop;
     const state = collectorState[p];
-    return (p === 'chzzk' ? '치지직: ' : 'SOOP: ') + (!on ? '꺼짐' : state?.status || '확인 중…') + (on && state?.campaigns?.length ? '\n' + state.campaigns.map(c => '· ' + c.title + ': ' + (c.completed ? '시청 조건 달성' : !c.active ? '기간 종료/시작 전' : `${c.earned}/${c.total}개 달성`)).join('\n') : '');
+    const campaigns = on ? (state?.campaigns || []).filter(c => c.active && !c.completed) : [];
+    return (p === 'chzzk' ? '치지직: ' : 'SOOP: ') + (!on ? '꺼짐' : state?.status || '확인 중…') +
+      campaigns.map(c => `\n· ${c.title}: ${c.earned}/${c.total}개 달성`).join('');
   }).join('\n');
 }
 function enableSettingControls() {
