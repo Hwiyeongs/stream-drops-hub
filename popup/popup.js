@@ -23,8 +23,11 @@ async function renderCollector() {
   el('collectorStatus').textContent = ['chzzk', 'soop', 'twitch'].map(p => {
     const on = p === 'chzzk' ? settings.autoCollectChzzk : p === 'soop' ? settings.autoCollectSoop : settings.autoCollectTwitch;
     const state = collectorState[p];
-    const campaigns = on ? (state?.campaigns || []).filter(c => c.active && !c.completed) : [];
-    return (p === 'chzzk' ? '치지직: ' : p === 'soop' ? 'SOOP: ' : '트위치: ') + (!on ? '꺼짐' : state?.status || '확인 중…') +
+    const fresh = Number.isFinite(state?.campaignsCheckedAt) && Date.now() - state.campaignsCheckedAt < 3 * 60000;
+    const campaigns = on && fresh && !state?.error ? (state?.campaigns || []).filter(c => c.active && !c.completed) : [];
+    const status = !on ? '꺼짐' : state?.error ? state.status : !fresh ?
+      (state?.userStopped ? '자동 시청 일시 중지됨 · 보관함 재확인 대기' : '보관함 재확인 대기') : state?.status || '확인 중…';
+    return (p === 'chzzk' ? '치지직: ' : p === 'soop' ? 'SOOP: ' : '트위치: ') + status +
       campaigns.map(c => `\n· ${c.title}: ${c.earned}/${c.total}개 달성`).join('');
   }).join('\n');
 }

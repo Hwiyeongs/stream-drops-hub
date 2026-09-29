@@ -4,7 +4,7 @@ import { CHZZK_CATEGORY, fetchChzzkEternalLives, fetchSoopEternalLives } from '.
 
 const headers = { Accept: 'application/json', 'Front-Client-Product-Type': 'GAME', 'Front-Client-Platform-Type': 'PC' };
 async function read(url, authenticated = false) {
-  const response = await fetchWithTimeout(url, { credentials: authenticated ? 'include' : 'omit', headers }, 10000);
+  const response = await fetchWithTimeout(url, { credentials: authenticated ? 'include' : 'omit', headers, cache: 'no-store' }, 10000);
   if ([401, 403].includes(response.status)) throw new Error('로그인 또는 계정 연결을 확인해 주세요.');
   if (!response.ok) throw new Error(`조회 실패 (HTTP ${response.status})`);
   const json = await response.json();

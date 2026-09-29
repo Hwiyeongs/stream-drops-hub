@@ -256,24 +256,30 @@ async function run() {
       state[platform] = { status: '꺼짐', checkedAt: Date.now() };
       await persist(state); continue;
     }
-    if (session.userStopped) { session.status = '탭을 닫거나 이동하여 일시 중지됨 · 토글을 껐다 켜면 재개'; await persist(state); continue; }
     state[platform] = session;
     try {
       const selected = settings.chzzkCollectCampaign || 'auto';
-      if (session.tabId && !await ownedTab(session)) {
+      if (!session.userStopped && session.tabId && !await ownedTab(session)) {
         if (await loadingOwnedTab(session)) {
           session.status = '방송 페이지 다시 로딩 중 · 다음 확인에서 재생 상태 확인';
           session.checkedAt = Date.now(); await persist(state); continue;
         }
-        session.userStopped = true; session.status = '탭을 닫거나 이동하여 일시 중지됨'; await persist(state); continue;
+        session.userStopped = true;
       }
       const plan = platform === 'chzzk' ? await chzzkPlan(selected) : platform === 'soop' ? await soopPlan() :
         await twitchPlan(Date.now(), session.liveKey?.startsWith('twitch:') ? session.liveKey.slice(7) : null);
       session.campaigns = plan.campaigns.map(c => ({ id:c.id, title:c.title, completed:c.completed, active:c.active, minutes:c.minutes, earned:c.earned, total:c.total }));
+      session.campaignsCheckedAt = Date.now();
+      session.error = null;
       if (plan.catalog) session.catalog = plan.catalog;
       settings = await getSettings();
       if (!settings[flag(platform)]) { await release(session); state[platform] = { status: '꺼짐' }; await persist(state); continue; }
       if (platform === 'chzzk' && settings.chzzkCollectCampaign !== selected) continue;
+      if (session.userStopped) {
+        session.status = plan.campaigns.length && plan.campaigns.every(c => c.completed) ? '대상 캠페인 수령 완료 · 자동 시청 일시 중지됨' :
+          '탭을 닫거나 이동하여 자동 시청 일시 중지됨 · 토글을 껐다 켜면 재개';
+        session.checkedAt = Date.now(); await persist(state); continue;
+      }
       const target = chooseTarget(plan, session, selected);
       if (!target) {
         await release(session); delete session.tabId; delete session.url;

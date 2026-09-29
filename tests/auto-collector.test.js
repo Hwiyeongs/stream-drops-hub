@@ -1,6 +1,6 @@
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-let data, tabs, actions, details, lives, claims, challenges, missions, soopLives, twitchLives, error, video, beforeFetch;
+let data, tabs, actions, details, lives, claims, challenges, missions, soopLives, twitchLives, twitchClaimed, error, video, beforeFetch;
 const channel = n => String(n).padStart(32,'a');
 const live = (id, campaign, viewers=10) => ({liveId:id,dropsCampaignNo:campaign,liveCategory:'Black_Survival_Eternal_Return',concurrentUserCount:viewers,channel:{channelId:channel(id),channelName:'방송'+id}});
 const detail = id => ({campaignNo:id,title:'캠페인'+id,categoryId:'Black_Survival_Eternal_Return',startDate:'2020-01-01 00:00:00',endDate:'2099-01-01 00:00:00',rewardList:[{rewardNo:id*10,conditionForMinutes:60,codeRemainingCount:10}]});
@@ -15,7 +15,7 @@ chrome.storage.session={async get(){return {twitchGqlHeaders:{at:Date.now(),head
 const {checkCollector,ensureCollectorAlarm,chooseTarget}=await import('../src/services/auto-collector.js');
 const {campaignProgress,soopMissions}=await import('../src/services/collector-plans.js');
 beforeEach(()=>{
- data={settings:{autoCollectChzzk:true,autoCollectSoop:false,chzzkCollectCampaign:'auto'}};tabs=[];actions=[];details=[detail(1),detail(2)];lives=[live(1,1),live(2,1),live(3,2)];claims=[];challenges=[];missions=[];soopLives=[];twitchLives=[{node:{id:'stream',viewersCount:10,broadcaster:{login:'streamer'}}}];error=false;video='playing';beforeFetch=null;
+ data={settings:{autoCollectChzzk:true,autoCollectSoop:false,chzzkCollectCampaign:'auto'}};tabs=[];actions=[];details=[detail(1),detail(2)];lives=[live(1,1),live(2,1),live(3,2)];claims=[];challenges=[];missions=[];soopLives=[];twitchLives=[{node:{id:'stream',viewersCount:10,broadcaster:{login:'streamer'}}}];twitchClaimed=false;error=false;video='playing';beforeFetch=null;
  globalThis.fetch=async (url,options)=>{
    if(beforeFetch)await beforeFetch();if(error)throw Error('offline');
    let body;
@@ -30,8 +30,8 @@ beforeEach(()=>{
      const {operationName}=JSON.parse(options?.body||'{}');
      body=operationName==='HubDropsViewer'?{data:{currentUser:{login:'viewer'}}}:
        operationName==='HubDropsCampaigns'?{data:{currentUser:{dropCampaigns:[{id:'er',name:'이터널리턴 트위치',status:'ACTIVE',startAt:'2020-01-01T00:00:00Z',endAt:'2099-01-01T00:00:00Z',game:{id:'game',slug:'eternal-return',displayName:'Eternal Return'}}]}}}:
-       operationName==='HubDropsInventory'?{data:{currentUser:{inventory:{dropCampaignsInProgress:[{id:'er',timeBasedDrops:[{id:'reward',self:{isClaimed:false,currentMinutesWatched:12}}]}]}}}}:
-       operationName==='HubDropsDetails'?{data:{user:{dropCampaign:{id:'er',name:'이터널리턴 트위치',status:'ACTIVE',startAt:'2020-01-01T00:00:00Z',endAt:'2099-01-01T00:00:00Z',game:{id:'game',slug:'eternal-return',displayName:'Eternal Return'},allow:{channels:[]},timeBasedDrops:[{id:'reward',requiredMinutesWatched:60,self:{isClaimed:false,currentMinutesWatched:12}}]}}}}:
+       operationName==='HubDropsInventory'?{data:{currentUser:{inventory:{gameEventDrops:[],dropCampaignsInProgress:twitchClaimed?[]:[{id:'er',timeBasedDrops:[{id:'reward',self:{isClaimed:false,currentMinutesWatched:12}}]}]}}}}:
+       operationName==='HubDropsDetails'?{data:{user:{dropCampaign:{id:'er',name:'이터널리턴 트위치',status:'ACTIVE',startAt:'2020-01-01T00:00:00Z',endAt:'2099-01-01T00:00:00Z',game:{id:'game',slug:'eternal-return',displayName:'Eternal Return'},allow:{channels:[]},timeBasedDrops:[{id:'reward',requiredMinutesWatched:60,self:{isClaimed:twitchClaimed,currentMinutesWatched:12}}]}}}}:
        operationName==='HubDropsGameLives'?{data:{game:{id:'game',streams:{edges:twitchLives}}}}:null;
      if(!body)throw Error(operationName);
      return new Response(JSON.stringify(body));
@@ -65,6 +65,25 @@ test('another active campaign can play while every live in the current campaign 
 test('API failure preserves current tab and never declares complete',async()=>{await checkCollector();error=true;await checkCollector();assert.equal(tabs.length,1);assert.match(data.collectorState.chzzk.status,/실패/);});
 test('turning off removes only owned tab',async()=>{await checkCollector();tabs.push({id:9,url:'https://example.com'});data.settings.autoCollectChzzk=false;await checkCollector();assert.deepEqual(tabs.map(t=>t.id),[9]);});
 test('user closed or navigated tab pauses without reopening',async()=>{await checkCollector();tabs[0].url='https://example.com';await checkCollector();assert.equal(tabs.length,1);assert.equal(data.collectorState.chzzk.userStopped,true);data.settings.autoCollectChzzk=false;await checkCollector();assert.equal(tabs.length,1);});
+test('paused CHZZK collection refreshes claims received on another computer without restarting playback',async()=>{
+ await checkCollector();
+ tabs[0].url='https://example.com';
+ await checkCollector();
+ claims=[{rewardNo:10},{rewardNo:20}];
+ actions=[];await checkCollector();
+ assert.equal(data.collectorState.chzzk.userStopped,true);
+ assert.equal(data.collectorState.chzzk.campaigns.every(c=>c.completed),true);
+ assert.match(data.collectorState.chzzk.status,/수령 완료/);
+ assert.equal(data.collectorState.chzzk.error,null);
+ assert.equal(actions.some(a=>['create','update','remove','play'].includes(a[0])),false);
+});
+test('paused CHZZK collection does not show old progress as current after a failed inventory read',async()=>{
+ await checkCollector();tabs[0].url='https://example.com';await checkCollector();
+ error=true;await checkCollector();
+ assert.equal(data.collectorState.chzzk.userStopped,true);
+ assert.match(data.collectorState.chzzk.status,/조회\/처리 실패/);
+ assert.ok(data.collectorState.chzzk.error);
+});
 test('other platform live tabs block concurrent viewing',async()=>{tabs=[{id:9,url:'https://chzzk.naver.com/live/'+channel(8)}];await checkCollector();assert.equal(actions.length,0);assert.match(data.collectorState.chzzk.status,/다른 방송 탭/);});
 test('disable during fetch prevents opening',async()=>{beforeFetch=async()=>{data.settings.autoCollectChzzk=false;};await checkCollector();assert.equal(tabs.length,0);});
 test('server progress is displayed separately from successful playback',async()=>{await checkCollector();challenges=[{rewardNo:10,accumWatchMinutes:12}];await checkCollector();assert.match(data.collectorState.chzzk.status,/서버 시청 12분/);assert.match(data.collectorState.chzzk.status,/재생 중/);});
@@ -96,6 +115,17 @@ test('Twitch pauses after user navigation and does not replace a manually opened
  await checkCollector();
  assert.equal(data.collectorState.twitch.userStopped,true);
  assert.equal(tabs[0].url,'https://example.com');
+});
+test('paused Twitch collection refreshes rewards claimed on another computer',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
+ await checkCollector();tabs[0].url='https://example.com';await checkCollector();
+ twitchClaimed=true;
+ actions=[];await checkCollector();
+ assert.equal(data.collectorState.twitch.userStopped,true);
+ assert.equal(data.collectorState.twitch.campaigns[0].earned,1);
+ assert.equal(data.collectorState.twitch.campaigns[0].completed,true);
+ assert.match(data.collectorState.twitch.status,/수령 완료/);
+ assert.equal(actions.some(a=>['create','update','remove','play'].includes(a[0])),false);
 });
 test('Twitch switches to another real live when server watch minutes remain unchanged',async()=>{
  data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;

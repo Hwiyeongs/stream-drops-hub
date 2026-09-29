@@ -16,7 +16,7 @@ beforeEach(() => {
   pages = {
     HubDropsViewer: { currentUser: { login: 'viewer' } },
     HubDropsCampaigns: { currentUser: { dropCampaigns: [campaign(), { ...campaign('other'), game: { displayName: 'Other Game' } }] } },
-    HubDropsInventory: { currentUser: { inventory: { dropCampaignsInProgress: [{ id: 'er-1', timeBasedDrops: [
+    HubDropsInventory: { currentUser: { inventory: { gameEventDrops: [], dropCampaignsInProgress: [{ id: 'er-1', timeBasedDrops: [
       { id: 'reward-1', self: { currentMinutesWatched: 15, isClaimed: false } },
     ] }] } } },
     HubDropsDetails: { user: { dropCampaign: detail() } },
@@ -105,12 +105,38 @@ test('claimable tier waits for claim instead of reporting watch completion', asy
   assert.equal(summarizeTwitchCampaign(detail(), null).completed, false);
 });
 
+test('awarded benefit fills missing tier self data after a claimed reward leaves in-progress inventory', async () => {
+  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress = [];
+  pages.HubDropsInventory.currentUser.inventory.gameEventDrops = [{ id: 'benefit-1', lastAwardedAt: '2026-09-30T00:00:00Z' }];
+  const tier = pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0];
+  tier.self = null;
+  tier.benefitEdges = [{ benefit: { id: 'benefit-1' } }];
+  const plan = await twitchPlan();
+  assert.equal(plan.campaigns[0].earned, 1);
+  assert.equal(plan.campaigns[0].completed, true);
+  assert.equal(plan.candidates.length, 0);
+  assert.equal(plan.finished, true);
+});
+
+test('awarded benefit from a different date cannot complete a current Twitch tier', async () => {
+  const tier = detail().timeBasedDrops[0];
+  tier.self = null;
+  tier.benefitEdges = [{ benefit: { id: 'benefit-1' } }];
+  tier.startAt = '2026-09-29T00:00:00Z';tier.endAt = '2026-09-30T00:00:00Z';
+  const result = summarizeTwitchCampaign({ ...detail(), timeBasedDrops: [tier] }, null, Date.now(),
+    [{ id: 'benefit-1', lastAwardedAt: '2026-09-30T00:00:01Z' }]);
+  assert.equal(result.completed, false);
+});
+
 test('missing campaign or inventory field is an error, not an empty completed plan', async () => {
   delete pages.HubDropsCampaigns.currentUser.dropCampaigns;
   await assert.rejects(twitchPlan(), /캠페인 목록 형식/);
   pages.HubDropsCampaigns.currentUser.dropCampaigns = [campaign()];
   delete pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress;
   await assert.rejects(twitchPlan(), /보관함 형식/);
+  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress = [];
+  delete pages.HubDropsInventory.currentUser.inventory.gameEventDrops;
+  await assert.rejects(twitchPlan(), /수령 기록 형식/);
 });
 
 test('Twitch plan rejects malformed broadcast addresses and unrelated categories', () => {

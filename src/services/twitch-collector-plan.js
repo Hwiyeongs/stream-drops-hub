@@ -15,10 +15,12 @@ const DETAILS = `query HubDropsDetails($login: String!, $id: ID!) {
   user(login: $login) { dropCampaign(id: $id) {
     id name status startAt endAt self { isAccountConnected } game { id slug displayName }
     allow { isEnabled channels { id name displayName } }
-    timeBasedDrops { id name requiredMinutesWatched self { isClaimed currentMinutesWatched dropInstanceID } }
+    timeBasedDrops { id name startAt endAt requiredMinutesWatched
+      benefitEdges { benefit { id } }
+      self { isClaimed currentMinutesWatched dropInstanceID } }
   } }
 }`;
-const INVENTORY = `query HubDropsInventory { currentUser { inventory { dropCampaignsInProgress {
+const INVENTORY = `query HubDropsInventory { currentUser { inventory { gameEventDrops { id lastAwardedAt } dropCampaignsInProgress {
   id timeBasedDrops { id self { isClaimed currentMinutesWatched dropInstanceID } }
 } } } }`;
 const ALLOWED_LIVES = `query HubDropsAllowedLives($logins: [String!]) {
@@ -38,14 +40,21 @@ function validLogin(value) { return typeof value === 'string' && CHANNEL.test(va
 function watched(drop) { return Number(drop?.self?.currentMinutesWatched) || 0; }
 function required(drop) { return Number(drop?.requiredMinutesWatched) || 0; }
 
-export function summarizeTwitchCampaign(detail, inventory, now = Date.now()) {
+export function summarizeTwitchCampaign(detail, inventory, now = Date.now(), awardedBenefits = []) {
   if (!detail?.id || !Array.isArray(detail.timeBasedDrops)) throw new Error('트위치 캠페인 보상 형식이 변경되었습니다.');
   const fresh = new Map((inventory?.timeBasedDrops || []).filter(d => d?.id).map(d => [d.id, d.self]));
+  const awarded = new Map(awardedBenefits.filter(b => b?.id).map(b => [String(b.id), Date.parse(b.lastAwardedAt)]));
   const drops = detail.timeBasedDrops.map(drop => {
     const inventorySelf = fresh.get(drop.id);
-    if (!inventorySelf) return drop;
+    const start = Date.parse(drop.startAt || detail.startAt), end = Date.parse(drop.endAt || detail.endAt);
+    const benefits = drop.benefitEdges?.map(edge => String(edge?.benefit?.id || '')).filter(Boolean) || [];
+    // A claimed tier can disappear from the in-progress inventory. Twitch's
+    // awarded-benefit record is a fallback when both tier views lack a claim.
+    const awardedDuringDrop = drop.self?.isClaimed == null && inventorySelf?.isClaimed == null &&
+      Number.isFinite(start) && Number.isFinite(end) && benefits.length > 0 &&
+      benefits.every(id => { const at = awarded.get(id); return Number.isFinite(at) && start <= at && at < end; });
     return { ...drop, self: { ...drop.self, ...inventorySelf,
-      isClaimed: drop.self?.isClaimed === true || inventorySelf.isClaimed === true,
+      isClaimed: drop.self?.isClaimed === true || inventorySelf?.isClaimed === true || awardedDuringDrop,
       currentMinutesWatched: Math.max(watched(drop), watched({ self: inventorySelf })) } };
   });
   const startAt = Date.parse(detail.startAt), endAt = Date.parse(detail.endAt);
@@ -127,15 +136,17 @@ export async function twitchPlan(now = Date.now(), currentChannel = null) {
   if (!validLogin(login) || !listed.currentUser || !inventory.currentUser) throw new Error('트위치 로그인이 필요합니다.');
   const rawList = listed.currentUser.dropCampaigns;
   const inventoryList = inventory.currentUser.inventory?.dropCampaignsInProgress;
+  const awardedBenefits = inventory.currentUser.inventory?.gameEventDrops;
   if (rawList !== null && !Array.isArray(rawList)) throw new Error('트위치 캠페인 목록 형식이 변경되었습니다.');
   if (inventoryList !== null && !Array.isArray(inventoryList)) throw new Error('트위치 보관함 형식이 변경되었습니다.');
+  if (awardedBenefits !== null && !Array.isArray(awardedBenefits)) throw new Error('트위치 수령 기록 형식이 변경되었습니다.');
   const progress = new Map((inventoryList || []).filter(c => c?.id).map(c => [String(c.id), c]));
   const active = (rawList || []).filter(c => c?.status === 'ACTIVE' && isEternalReturnGame(c.game) && Date.parse(c.endAt) > now);
   const campaigns = await Promise.all(active.map(async c => {
     const data = await gql(capture, 'HubDropsDetails', DETAILS, { login, id: c.id });
     const detail = data.user?.dropCampaign;
     if (String(detail?.id) !== String(c.id) || !isEternalReturnGame(detail?.game)) throw new Error('트위치 캠페인 상세 정보가 일치하지 않습니다.');
-    return summarizeTwitchCampaign(detail, progress.get(String(c.id)), now);
+    return summarizeTwitchCampaign(detail, progress.get(String(c.id)), now, awardedBenefits || []);
   }));
   const liveQueries = new Map();
   for (const campaign of campaigns.filter(c => c.active && c.watchable)) {
