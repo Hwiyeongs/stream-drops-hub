@@ -20,9 +20,10 @@ const DETAILS = `query HubDropsDetails($login: String!, $id: ID!) {
       self { isClaimed currentMinutesWatched dropInstanceID } }
   } }
 }`;
-const INVENTORY = `query HubDropsInventory { currentUser { inventory { gameEventDrops { id lastAwardedAt } dropCampaignsInProgress {
+const INVENTORY = `query HubDropsInventory { currentUser { inventory { dropCampaignsInProgress {
   id timeBasedDrops { id self { isClaimed currentMinutesWatched dropInstanceID } }
 } } } }`;
+const AWARDED = 'query HubDropsAwarded { currentUser { inventory { gameEventDrops { id lastAwardedAt } } } }';
 const ALLOWED_LIVES = `query HubDropsAllowedLives($logins: [String!]) {
   users(logins: $logins) { login stream { id viewersCount game { id } } }
 }`;
@@ -108,7 +109,7 @@ async function gql(capture, operationName, query, variables = {}) {
   try { payload = await response.json(); } catch { throw new Error('트위치 캠페인 응답을 읽을 수 없습니다.'); }
   if (Array.isArray(payload?.errors) && payload.errors.length) {
     if (payload.errors.some(e => /integrity|unauthori[sz]ed/i.test(String(e?.message || '')))) await clearCapturedTwitchGqlHeaders();
-    throw new Error('트위치 캠페인 조회가 거부되었습니다. 다음 확인에서 다시 시도합니다.');
+    throw new Error(`트위치 캠페인 조회가 거부되었습니다 (${operationName}). 다음 확인에서 다시 시도합니다.`);
   }
   if (!payload?.data || typeof payload.data !== 'object') throw new Error('트위치 캠페인 응답 형식이 변경되었습니다.');
   return payload.data;
@@ -136,18 +137,33 @@ export async function twitchPlan(now = Date.now(), currentChannel = null) {
   if (!validLogin(login) || !listed.currentUser || !inventory.currentUser) throw new Error('트위치 로그인이 필요합니다.');
   const rawList = listed.currentUser.dropCampaigns;
   const inventoryList = inventory.currentUser.inventory?.dropCampaignsInProgress;
-  const awardedBenefits = inventory.currentUser.inventory?.gameEventDrops;
   if (rawList !== null && !Array.isArray(rawList)) throw new Error('트위치 캠페인 목록 형식이 변경되었습니다.');
   if (inventoryList !== null && !Array.isArray(inventoryList)) throw new Error('트위치 보관함 형식이 변경되었습니다.');
-  if (awardedBenefits !== null && !Array.isArray(awardedBenefits)) throw new Error('트위치 수령 기록 형식이 변경되었습니다.');
   const progress = new Map((inventoryList || []).filter(c => c?.id).map(c => [String(c.id), c]));
   const active = (rawList || []).filter(c => c?.status === 'ACTIVE' && isEternalReturnGame(c.game) && Date.parse(c.endAt) > now);
-  const campaigns = await Promise.all(active.map(async c => {
+  const details = await Promise.all(active.map(async c => {
     const data = await gql(capture, 'HubDropsDetails', DETAILS, { login, id: c.id });
     const detail = data.user?.dropCampaign;
     if (String(detail?.id) !== String(c.id) || !isEternalReturnGame(detail?.game)) throw new Error('트위치 캠페인 상세 정보가 일치하지 않습니다.');
-    return summarizeTwitchCampaign(detail, progress.get(String(c.id)), now, awardedBenefits || []);
+    return detail;
   }));
+  const needsAwardLookup = details.some(detail => detail.timeBasedDrops?.some(drop => {
+    const inProgress = progress.get(String(detail.id))?.timeBasedDrops?.find(item => item.id === drop.id);
+    return drop.self?.isClaimed == null && inProgress?.self?.isClaimed == null &&
+      drop.benefitEdges?.some(edge => edge?.benefit?.id);
+  }));
+  let awardedBenefits = [];
+  if (needsAwardLookup) {
+    try {
+      const data = await gql(capture, 'HubDropsAwarded', AWARDED);
+      if (!Array.isArray(data.currentUser?.inventory?.gameEventDrops)) throw new Error('트위치 수령 기록 형식이 변경되었습니다.');
+      awardedBenefits = data.currentUser.inventory.gameEventDrops;
+    } catch (error) {
+      // Award history is only a fallback. The verified tier state remains usable.
+      console.warn('[Drops Hub] Optional Twitch award history unavailable:', error.message);
+    }
+  }
+  const campaigns = details.map(detail => summarizeTwitchCampaign(detail, progress.get(String(detail.id)), now, awardedBenefits));
   const liveQueries = new Map();
   for (const campaign of campaigns.filter(c => c.active && c.watchable)) {
     const allowed = campaign.allowed.map(c => c?.name?.toLowerCase()).filter(validLogin);
