@@ -53,11 +53,17 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
       visible[0] || (videos.length === 1 ? videos[0] : null);
   };
   let video = findVideo();
+  const restorePlayerSound = () => {
+    if (!video || platform === 'soop') return;
+    video.defaultMuted = false;
+    video.muted = false;
+    if (video.volume === 0) video.volume = 1;
+  };
   if (start && platform === 'chzzk' && (!video || video.paused || video.ended)) {
     // The site's own control can initialize the live player before a video exists.
     const playButton = document.querySelector?.('.pzp .pzp-brand-playback-button,.pzp .pzp-playback-switch,[aria-label="video player"] .pzp-brand-playback-button,[aria-label="video player"] .pzp-playback-switch');
     if (playButton && !playButton.disabled) {
-      if (video) { video.defaultMuted = true; video.muted = true; }
+      restorePlayerSound();
       playButton.click();
       await new Promise(resolve => setTimeout(resolve, 500));
       video = findVideo();
@@ -66,7 +72,7 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
   if (start && platform === 'twitch' && (!video || video.paused || video.ended)) {
     const playButton = document.querySelector?.('[data-a-target="player-play-pause-button"]');
     if (playButton && !playButton.disabled) {
-      if (video) { video.defaultMuted = true; video.muted = true; }
+      restorePlayerSound();
       playButton.click();
       await new Promise(resolve => setTimeout(resolve, 500));
       video = findVideo();
@@ -78,8 +84,11 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
     paused: video.paused, ended: video.ended, muted: video.muted,
     deltaSeconds: Math.round(deltaSeconds * 100) / 100,
   });
-  // Browser-tab mute does not make the media element eligible for muted autoplay.
-  if (start) { video.defaultMuted = true; video.muted = true; }
+  // Tab mute is separate from the site's player mute state. A player muted by
+  // the site can fail to earn watch progress even while the video clock moves.
+  if (platform === 'soop') {
+    if (start) { video.defaultMuted = true; video.muted = true; }
+  } else restorePlayerSound();
   if (start && platform === 'soop') {
     // SOOP's initial data:video is a short placeholder. Its own play control
     // starts the live stream; playing the placeholder alone never joins it.
@@ -93,23 +102,44 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
   }
   if (video.error) return result('error', `MediaError${Number(video.error.code) || 0}`);
   if (video.paused && !start) return result('paused');
+  let mutedFallback = false;
   if (video.paused) {
-    let timer;
+    const playWithinTimeout = async () => {
+      let timer;
+      try {
+        await Promise.race([
+          video.play(),
+          new Promise((_, reject) => { timer = setTimeout(() => reject({ name: 'TimeoutError' }), 4000); }),
+        ]);
+      } finally { clearTimeout(timer); }
+    };
     try {
-      await Promise.race([
-        video.play(),
-        new Promise((_, reject) => { timer = setTimeout(() => reject({ name: 'TimeoutError' }), 4000); }),
-      ]);
+      await playWithinTimeout();
     } catch (error) {
-      const reason = ['NotAllowedError', 'AbortError', 'NotSupportedError', 'TimeoutError'].includes(error?.name) ? error.name : 'PlaybackError';
-      return result('blocked', reason);
-    } finally { clearTimeout(timer); }
+      if (error?.name === 'NotAllowedError' && platform !== 'soop') {
+        // Chrome permits muted autoplay even when audible autoplay is blocked.
+        // Use that only to start playback, then restore the player's sound.
+        video.defaultMuted = true;
+        video.muted = true;
+        try { await playWithinTimeout(); error = null; mutedFallback = true; }
+        catch (retryError) { error = retryError; }
+        finally { restorePlayerSound(); }
+      }
+      if (error) {
+        const reason = ['NotAllowedError', 'AbortError', 'NotSupportedError', 'TimeoutError'].includes(error?.name) ? error.name : 'PlaybackError';
+        return result('blocked', reason);
+      }
+    }
   }
+  restorePlayerSound();
+  if (mutedFallback && video.paused) return result('blocked', 'AutoplayUnmutePaused');
   const before = video.currentTime;
   await new Promise(resolve => setTimeout(resolve, 2500));
   if (!sameLocation(location.href)) return result('navigation');
   const delta = Math.max(0, video.currentTime - before);
-  if (start) video.muted = true;
+  if (platform === 'soop') { if (start) video.muted = true; }
+  else restorePlayerSound();
+  if (platform !== 'soop' && (video.muted || video.volume === 0)) return result('blocked', 'PlayerMuted', delta);
   return result(!video.paused && !video.ended && delta > 0.1 ? 'playing' : 'stalled', null, delta);
 }
 async function probe(session, start = false, platform = 'chzzk') {
@@ -287,6 +317,7 @@ async function run() {
         await persist(state);
         playback = await startPlayback(session, platform, previousActive, !previous);
       } else {
+        if (tab.mutedInfo?.muted !== true) tab = await chrome.tabs.update(session.tabId, { muted: true, autoDiscardable: false });
         playback = tab.discarded ? { state: 'discarded' } : await probe(session, false, platform);
         session.diagnostic = { platform, ...playback, attempt: 0, checkedAt: Date.now() };
         if (playback.state !== 'playing' && playback.state !== 'navigation' &&

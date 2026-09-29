@@ -8,7 +8,7 @@ const event={addListener(){}};
 globalThis.chrome={
  storage:{local:{async get(k){return k==null?structuredClone(data):Object.fromEntries((Array.isArray(k)?k:[k]).map(x=>[x,structuredClone(data[x])]));},async set(v){Object.assign(data,structuredClone(v));}}},
  alarms:{async get(){return null;},async create(n,v){data.alarm=v;},async clear(){delete data.alarm;}},
- tabs:{async get(id){const t=tabs.find(t=>t.id===id);if(!t)throw Error('closed');return t;},async query({url,active,windowId}){return tabs.filter(t=>(!url||(Array.isArray(url)?url:[url]).some(p=>t.url.startsWith(p.split('*')[0])))&&(active===undefined||t.active===active)&&(windowId===undefined||t.windowId===windowId));},async create(v){const t={id:Math.max(0,...tabs.map(t=>t.id))+1,windowId:1,...v};tabs.push(t);actions.push(['create',v]);return t;},async update(id,v){const t=tabs.find(t=>t.id===id);if(v.active)tabs.filter(x=>x.windowId===t.windowId).forEach(x=>x.active=false);Object.assign(t,v);if(v.active&&t.discarded){t.discarded=false;t.status='complete';}actions.push(['update',v]);return t;},async remove(id){tabs=tabs.filter(t=>t.id!==id);actions.push(['remove',id]);}},
+ tabs:{async get(id){const t=tabs.find(t=>t.id===id);if(!t)throw Error('closed');return t;},async query({url,active,windowId}){return tabs.filter(t=>(!url||(Array.isArray(url)?url:[url]).some(p=>t.url.startsWith(p.split('*')[0])))&&(active===undefined||t.active===active)&&(windowId===undefined||t.windowId===windowId));},async create(v){const t={id:Math.max(0,...tabs.map(t=>t.id))+1,windowId:1,...v};tabs.push(t);actions.push(['create',v]);return t;},async update(id,v){const t=tabs.find(t=>t.id===id);if(v.active)tabs.filter(x=>x.windowId===t.windowId).forEach(x=>x.active=false);Object.assign(t,v);if('muted' in v)t.mutedInfo={muted:v.muted,reason:'extension'};if(v.active&&t.discarded){t.discarded=false;t.status='complete';}actions.push(['update',v]);return t;},async remove(id){tabs=tabs.filter(t=>t.id!==id);actions.push(['remove',id]);}},
  scripting:{async executeScript(){actions.push(['play',video]);return [{result:{state:video}}];}},runtime:{getURL:p=>p},notifications:{async create(){}},
 };
 chrome.storage.session={async get(){return {twitchGqlHeaders:{at:Date.now(),headers:{Authorization:'OAuth test','Client-Integrity':'test'}}};},async remove(){}};
@@ -110,7 +110,7 @@ test('Twitch switches to another real live when server watch minutes remain unch
  assert.equal(tabs.length,1);
  assert.equal(tabs[0].url,'https://www.twitch.tv/backup');
 });
-test('Twitch player control starts muted real video and verifies its clock advances',async()=>{
+test('Twitch player stays unmuted while its owned tab plays silently',async()=>{
  const originalLocation=globalThis.location,originalDocument=globalThis.document;
  const url='https://www.twitch.tv/streamer';
  let started=0,clicks=0;
@@ -118,13 +118,22 @@ test('Twitch player control starts muted real video and verifies its clock advan
   get currentTime(){return started ? (Date.now()-started)/1000 : 0;},
   getBoundingClientRect(){return {width:640,height:360};},clientWidth:640,clientHeight:360,
   closest:()=>({}),matches:()=>false,async play(){throw Error('play should be handled by site control');}};
- const button={disabled:false,click(){clicks++;assert.equal(media.muted,true);media.paused=false;started=Date.now();}};
+ const button={disabled:false,click(){clicks++;assert.equal(media.muted,false);media.paused=false;started=Date.now();}};
  globalThis.location={href:url+'?referrer=raid'};
  globalThis.document={querySelectorAll:()=>[media],querySelector:selector=>selector==='[data-a-target="player-play-pause-button"]'?button:null};
  try {
   const result=await (await import('../src/services/auto-collector.js')).controlVideo(url,true,'twitch');
-  assert.equal(result.state,'playing');assert.equal(result.muted,true);assert.equal(clicks,1);assert.ok(result.deltaSeconds>2);
+  assert.equal(result.state,'playing');assert.equal(result.muted,false);assert.equal(clicks,1);assert.ok(result.deltaSeconds>2);
  } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
+});
+test('a manually unmuted owned Twitch tab is silenced before playback inspection',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
+ await checkCollector();
+ tabs[0].muted=false;tabs[0].mutedInfo.muted=false;
+ const original=chrome.scripting.executeScript;
+ chrome.scripting.executeScript=async()=>{assert.equal(tabs[0].muted,true);return [{result:{state:'playing',muted:false,deltaSeconds:1}}];};
+ try {await checkCollector();assert.equal(tabs[0].muted,true);}
+ finally {chrome.scripting.executeScript=original;}
 });
 test('SOOP recovers an existing stream in the background without stealing focus',async()=>{
  data.settings.autoCollectChzzk=false;data.settings.autoCollectSoop=true;
@@ -272,15 +281,61 @@ test('05:00 reset clears collection pause and cooldown while preserving records 
 });
 
 
-test('controlVideo mutes the media element before the first play',async()=>{
+test('CHZZK starts with player audio enabled and relies on tab mute',async()=>{
  const originalLocation=globalThis.location,originalDocument=globalThis.document;
  const url='https://chzzk.naver.com/live/'+channel(1);
  const media={paused:true,ended:false,muted:false,defaultMuted:false,currentTime:0,readyState:4,networkState:1,
   getBoundingClientRect(){return {width:640,height:360};},clientWidth:640,clientHeight:360,
-  async play(){assert.equal(this.muted,true);assert.equal(this.defaultMuted,true);this.paused=false;setTimeout(()=>{this.currentTime=1;},50);}};
+  async play(){assert.equal(this.muted,false);assert.equal(this.defaultMuted,false);this.paused=false;setTimeout(()=>{this.currentTime=1;},50);}};
  globalThis.location={href:url};globalThis.document={querySelectorAll:()=>[media]};
- try {const r=await (await import('../src/services/auto-collector.js')).controlVideo(url,true);assert.equal(r.state,'playing');assert.equal(r.muted,true);assert.ok(r.deltaSeconds>0);}
+ try {const r=await (await import('../src/services/auto-collector.js')).controlVideo(url,true);assert.equal(r.state,'playing');assert.equal(r.muted,false);assert.ok(r.deltaSeconds>0);}
  finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
+});
+test('CHZZK uses muted autoplay only as a brief fallback, then restores player audio',async()=>{
+ const originalLocation=globalThis.location,originalDocument=globalThis.document;
+ const url='https://chzzk.naver.com/live/'+channel(1);
+ let attempts=0;
+ const media={paused:true,ended:false,muted:false,defaultMuted:false,currentTime:0,readyState:4,networkState:1,
+  getBoundingClientRect(){return {width:640,height:360};},clientWidth:640,clientHeight:360,
+  async play(){attempts++;if(!this.muted)throw Object.assign(Error('autoplay denied'),{name:'NotAllowedError'});
+   this.paused=false;setTimeout(()=>{this.currentTime=1;},50);}};
+ globalThis.location={href:url};globalThis.document={querySelectorAll:()=>[media]};
+ try {
+  const result=await (await import('../src/services/auto-collector.js')).controlVideo(url,true);
+  assert.equal(result.state,'playing');assert.equal(attempts,2);
+  assert.equal(media.muted,false);assert.equal(media.defaultMuted,false);
+ } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
+});
+test('autoplay that stops on player unmute is reported as blocked, not playing',async()=>{
+ const originalLocation=globalThis.location,originalDocument=globalThis.document;
+ const url='https://chzzk.naver.com/live/'+channel(1);
+ let mediaMuted=false,started=false;
+ const media={paused:true,ended:false,defaultMuted:false,currentTime:0,readyState:4,networkState:1,
+  get muted(){return mediaMuted;},set muted(value){mediaMuted=value;if(started&&!value)this.paused=true;},
+  getBoundingClientRect(){return {width:640,height:360};},clientWidth:640,clientHeight:360,
+  async play(){if(!this.muted)throw Object.assign(Error('autoplay denied'),{name:'NotAllowedError'});
+   started=true;this.paused=false;}};
+ globalThis.location={href:url};globalThis.document={querySelectorAll:()=>[media]};
+ try {
+  const result=await (await import('../src/services/auto-collector.js')).controlVideo(url,true);
+  assert.equal(result.state,'blocked');assert.equal(result.reason,'AutoplayUnmutePaused');
+  assert.equal(media.muted,false);
+ } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
+});
+test('periodic Twitch check restores a site-muted player and zero volume',async()=>{
+ const originalLocation=globalThis.location,originalDocument=globalThis.document;
+ const url='https://www.twitch.tv/streamer';
+ const started=Date.now();
+ const media={paused:false,ended:false,muted:true,defaultMuted:true,volume:0,readyState:4,networkState:1,
+  get currentTime(){return (Date.now()-started)/1000;},
+  getBoundingClientRect(){return {width:640,height:360};},clientWidth:640,clientHeight:360,
+  closest:()=>({})};
+ globalThis.location={href:url};globalThis.document={querySelectorAll:()=>[media]};
+ try {
+  const result=await (await import('../src/services/auto-collector.js')).controlVideo(url,false,'twitch');
+  assert.equal(result.state,'playing');assert.equal(result.muted,false);
+  assert.equal(media.defaultMuted,false);assert.equal(media.volume,1);
+ } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
 });
 test('follow-up setting change still runs after an uncaught cycle failure',async()=>{
  const original=chrome.storage.local.get;
@@ -315,7 +370,7 @@ test('CHZZK starts its own player when the video has not been created yet',async
  globalThis.document={querySelectorAll:()=>media?[media]:[],querySelector:()=>button};
  try {
    const r=await (await import('../src/services/auto-collector.js')).controlVideo(url,true);
-   assert.equal(clicks,1);assert.equal(r.state,'playing');assert.equal(r.muted,true);
+   assert.equal(clicks,1);assert.equal(r.state,'playing');assert.equal(r.muted,false);
  } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
 });
 test('CHZZK ignores an advertising video and plays the designated live player',async()=>{
@@ -334,7 +389,7 @@ test('CHZZK ignores an advertising video and plays the designated live player',a
  globalThis.document={querySelectorAll:()=>[ad,liveVideo],querySelector:()=>button};
  try {
    const r=await (await import('../src/services/auto-collector.js')).controlVideo(url,true);
-   assert.equal(clicks,1);assert.equal(r.state,'playing');assert.equal(r.muted,true);
+   assert.equal(clicks,1);assert.equal(r.state,'playing');assert.equal(r.muted,false);
  } finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
 });
 
@@ -359,8 +414,8 @@ test('NotAllowedError is recorded without storing the exception message',async()
  const media={paused:true,ended:false,muted:false,defaultMuted:false,currentTime:0,readyState:2,networkState:1,
   getBoundingClientRect(){return {width:0,height:0};},
   play(){assert.equal(this.muted,true);return Promise.reject(Object.assign(Error('private URL or cookie must not be stored'),{name:'NotAllowedError'}));}};
- globalThis.location={href:url};globalThis.document={querySelectorAll:()=>[media]};
- try {const r=await (await import('../src/services/auto-collector.js')).controlVideo(url,true);assert.equal(r.state,'blocked');assert.equal(r.reason,'NotAllowedError');assert.equal(JSON.stringify(r).includes('private URL'),false);}
+ globalThis.location={href:url};globalThis.document={querySelectorAll:()=>[media],querySelector:()=>null};
+ try {const r=await (await import('../src/services/auto-collector.js')).controlVideo(url,true,'soop');assert.equal(r.state,'blocked');assert.equal(r.reason,'NotAllowedError');assert.equal(JSON.stringify(r).includes('private URL'),false);}
  finally {globalThis.location=originalLocation;globalThis.document=originalDocument;}
 });
 
