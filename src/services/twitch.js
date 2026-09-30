@@ -149,6 +149,7 @@ export async function fetchTwitchDrops() {
       query Inventory {
         currentUser {
           id
+          login
           inventory {
             dropCampaignsInProgress {
               id
@@ -223,6 +224,8 @@ export async function fetchTwitchDrops() {
   const decoded = decodeInventoryResponse(json);
   if (decoded.error) return { loggedIn: decoded.loggedIn, drops: [], error: decoded.error };
   const campaigns = decoded.campaigns;
+  const envelope = Array.isArray(json) ? json[0] : json;
+  const viewer = envelope?.data?.currentUser;
   const now = new Date();
   const drops = [];
 
@@ -268,6 +271,10 @@ export async function fetchTwitchDrops() {
         platformName: '트위치',
         gameTitle,
         campaignName: campaign.name,
+        campaignId: campaign.id == null ? null : String(campaign.id),
+        timeBasedDropId: timeDrop.id == null ? null : String(timeDrop.id),
+        twitchUserId: viewer?.id == null ? null : String(viewer.id),
+        twitchUserLogin: typeof viewer?.login === 'string' ? viewer.login.toLowerCase() : null,
         campaignDate: twitchDisplayDate(campaign.name, timeDrop.startAt, campaign.startAt, campaign.endAt),
         rewardName,
         rewardImageUrl,
@@ -334,7 +341,22 @@ async function ensureTwitchClaimHeaders({ forceFresh = false } = {}) {
   return { capture, temporaryTabId };
 }
 
-async function sendCapturedTwitchClaim(dropInstanceId, capture) {
+async function sendCapturedTwitchClaim(dropInstanceId, capture, expectedUserId) {
+  // Bind the receipt to the account using the same headers as the mutation.
+  // A cached card from an earlier login must never be recorded for a new account.
+  const viewerResponse = await fetchWithTimeout(TWITCH_GQL_URL, {
+    method: 'POST', headers: buildCapturedTwitchRequestHeaders(capture),
+    body: JSON.stringify({ operationName: 'HubDropsClaimViewer',
+      query: 'query HubDropsClaimViewer { currentUser { id login } }' }),
+  }, 8000);
+  let viewerJson = null;
+  try { viewerJson = await viewerResponse.json(); } catch {}
+  if (!viewerResponse.ok || viewerJson?.errors?.length) return { response: viewerResponse, json: viewerJson };
+  const viewer = viewerJson?.data?.currentUser;
+  if (!viewer?.id) throw new Error('트위치 수령 계정을 확인하지 못했습니다. 로그인 상태를 확인해 주세요.');
+  if (expectedUserId && String(viewer.id) !== String(expectedUserId)) {
+    throw new Error('트위치 로그인 계정이 변경되었습니다. 보관함을 새로고침한 뒤 다시 수령해 주세요.');
+  }
   const query = `
     mutation DropsPage_ClaimDropRewards($input: ClaimDropRewardsInput!) {
       claimDropRewards(input: $input) { status }
@@ -355,11 +377,11 @@ async function sendCapturedTwitchClaim(dropInstanceId, capture) {
   );
   let json = null;
   try { json = await response.json(); } catch {}
-  return { response, json };
+  return { response, json, viewer };
 }
 
 // Claim exact instances only. The integrity/session headers are borrowed from Twitch's own page request.
-export async function claimTwitchDrop(dropInstanceId) {
+export async function claimTwitchDrop(dropInstanceId, expectedUserId = null) {
   if (typeof dropInstanceId !== 'string' || !dropInstanceId.trim()) {
     throw new Error('수령 가능한 보상 ID가 없습니다. 보관함을 새로고침해 주세요.');
   }
@@ -368,14 +390,14 @@ export async function claimTwitchDrop(dropInstanceId) {
   try {
     let session = await ensureTwitchClaimHeaders();
     if (session.temporaryTabId) temporaryTabs.add(session.temporaryTabId);
-    let { response, json } = await sendCapturedTwitchClaim(dropInstanceId, session.capture);
+    let { response, json, viewer } = await sendCapturedTwitchClaim(dropInstanceId, session.capture, expectedUserId);
 
     const hasIntegrityError = payload => payload?.errors?.some(error => /integrity/i.test(error?.message || ''));
     if (hasIntegrityError(json)) {
       // The page renews Client-Integrity itself. Force a newly observed page request and retry once.
       session = await ensureTwitchClaimHeaders({ forceFresh: true });
       if (session.temporaryTabId) temporaryTabs.add(session.temporaryTabId);
-      ({ response, json } = await sendCapturedTwitchClaim(dropInstanceId, session.capture));
+      ({ response, json, viewer } = await sendCapturedTwitchClaim(dropInstanceId, session.capture, expectedUserId));
     }
 
     if (!response.ok) throw new Error(`수령 요청 실패 (HTTP ${response.status})`);
@@ -388,7 +410,13 @@ export async function claimTwitchDrop(dropInstanceId) {
 
     const claimStatus = json?.data?.claimDropRewards?.status;
     if (['ELIGIBLE_FOR_ALL', 'DROP_INSTANCE_ALREADY_CLAIMED', 'SUCCESS'].includes(claimStatus)) {
-      return { success: true, status: claimStatus };
+      const claimConfirmedAt = Date.now();
+      return { success: true, status: claimStatus,
+        twitchUserId: String(viewer.id),
+        twitchUserLogin: typeof viewer.login === 'string' ? viewer.login.toLowerCase() : null,
+        // An already-claimed instance proves completion, not the original claim date.
+        claimedAt: claimStatus === 'DROP_INSTANCE_ALREADY_CLAIMED' ? null : claimConfirmedAt,
+        claimConfirmedAt };
     }
     throw new Error(`트위치 수령을 확인하지 못했습니다 (${claimStatus || '응답 없음'}). 보관함에서 확인해 주세요.`);
   } finally {

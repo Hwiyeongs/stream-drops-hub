@@ -14,7 +14,7 @@ beforeEach(() => {
   requested = []; tabActions = []; awardedRejected = false; localData = {};
   capture = { at: Date.now(), headers: { Authorization: 'OAuth test', 'Client-Integrity': 'test' } };
   pages = {
-    HubDropsViewer: { currentUser: { login: 'viewer' } },
+    HubDropsViewer: { currentUser: { id: 'user-1', login: 'viewer' } },
     HubDropsCampaigns: { currentUser: { dropCampaigns: [campaign(), { ...campaign('other'), game: { displayName: 'Other Game' } }] } },
     HubDropsInventory: { currentUser: { inventory: { dropCampaignsInProgress: [{ id: 'er-1', timeBasedDrops: [
       { id: 'reward-1', self: { currentMinutesWatched: 15, isClaimed: false } },
@@ -28,7 +28,7 @@ beforeEach(() => {
   };
   globalThis.chrome = {
     storage: { session: { async get() { return { twitchGqlHeaders: capture }; }, async remove() { capture = null; } },
-      local: { async get(key) { return { [key]: localData[key] }; } } },
+      local: { async get(key) { return key == null ? structuredClone(localData) : { [key]: localData[key] }; } } },
     tabs: { async create(options) { tabActions.push(['create', options]); return { id: 7, ...options }; },
       async update(id, options) { tabActions.push(['update', id, options]); },
       async get() { return { id: 7, url: 'https://www.twitch.tv/drops/inventory' }; },
@@ -212,4 +212,78 @@ test('claimed flags from either campaign or inventory stop viewing without a man
  pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0].self.isClaimed=false;
  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress[0].timeBasedDrops[0].self.isClaimed=true;
  const plan=await twitchPlan();assert.equal(plan.finished,true);assert.equal(plan.candidates.length,0);
+});
+
+const receipt = (extra = {}) => ({ id: 'twitch_instance-1', platform: 'twitch', actionType: 'claimed',
+  twitchUserId: 'user-1', campaignId: 'er-1', timeBasedDropId: 'reward-1', dropInstanceId: 'instance-1',
+  claimedAt: Date.now(), ...extra });
+
+test('a confirmed local receipt completes an empty server tier without opening another live', async () => {
+  localData['handled:twitch_instance-1'] = receipt();
+  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress = [];
+  pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0].self = null;
+  const plan = await twitchPlan();
+  assert.equal(plan.finished, true); assert.equal(plan.campaigns[0].earned, 1);
+  assert.equal(plan.campaigns[0].minutes, 0);
+  assert.equal(plan.claimedToday, 1); assert.equal(plan.candidates.length, 0);
+  assert.equal(requested.some(r => r.operationName === 'HubDropsGameLives'), false);
+});
+
+test('same reward name, different campaign, account or tier cannot reuse a local receipt', async () => {
+  for (const extra of [{ campaignId: 'old-campaign' }, { twitchUserId: 'other-user' },
+    { timeBasedDropId: 'other-tier' }, { platform: 'chzzk' }, { actionType: 'saved' },
+    { twitchUserId: null }, { campaignId: null }, { timeBasedDropId: null }]) {
+    localData['handled:twitch_instance-1'] = receipt(extra);
+    const plan = await twitchPlan();
+    assert.equal(plan.campaigns[0].earned, 0, JSON.stringify(extra));
+    assert.equal(plan.candidates.length, 1); assert.equal(plan.campaigns[0].claimedToday, 0);
+  }
+});
+
+test('today receipts remain visible after the campaign disappears and duplicate instance records count once', async () => {
+  localData['handled:twitch_instance-1'] = receipt();
+  localData['handled:duplicate'] = receipt();
+  pages.HubDropsCampaigns.currentUser.dropCampaigns = [];
+  const plan = await twitchPlan();
+  assert.equal(plan.campaigns.length, 0); assert.equal(plan.claimedToday, 1);
+  pages.HubDropsViewer.currentUser.id = 'other-account';
+  assert.equal((await twitchPlan()).claimedToday, 0);
+});
+
+test('a receipt for a different instance does not complete the current instance', async () => {
+  localData['handled:twitch_instance-1'] = receipt();
+  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress[0].timeBasedDrops[0].self.dropInstanceID = 'instance-2';
+  assert.equal((await twitchPlan()).finished, false);
+});
+
+test('only the exact claimed tier is completed when three tiers share a token', async () => {
+  const base = pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0];
+  base.self = { isClaimed: false, currentMinutesWatched: 60 };
+  base.benefitEdges = [{ benefit: { id: 'same-token' } }];
+  pages.HubDropsDetails.user.dropCampaign.timeBasedDrops.push(
+    { ...base, id: 'reward-2', self: { isClaimed: false, currentMinutesWatched: 0 } },
+    { ...base, id: 'reward-3', self: { isClaimed: false, currentMinutesWatched: 0 } });
+  localData['handled:twitch_instance-1'] = receipt();
+  const plan = await twitchPlan();
+  assert.equal(plan.finished, false); assert.equal(plan.campaigns[0].earned, 1);
+  assert.equal(plan.campaigns[0].total, 3); assert.equal(plan.claimedToday, 1);
+  assert.equal(plan.needsClaim, false); assert.equal(plan.candidates.length, 1);
+});
+
+test('05:00 KST resets today count while preserving completion of a one-time campaign', () => {
+  const claimedAt = Date.parse('2026-09-30T04:59:00+09:00');
+  const context = { twitchUserId: 'user-1', handled: { entry: receipt({ claimedAt }) } };
+  const before = summarizeTwitchCampaign(detail(), null, claimedAt, context);
+  const after = summarizeTwitchCampaign(detail(), null, Date.parse('2026-09-30T05:00:00+09:00'), context);
+  assert.equal(before.claimedToday, 1); assert.equal(after.claimedToday, 0);
+  assert.equal(after.completed, true); assert.equal(after.watchable, false);
+});
+
+test('already-claimed or unknown original dates prove completion without claiming today', () => {
+  const now = Date.parse('2026-09-30T10:00:00+09:00');
+  for (const claimedAt of [null, undefined, 'today', now + 1000]) {
+    const result = summarizeTwitchCampaign(detail(), null, now,
+      { twitchUserId: 'user-1', handled: { entry: receipt({ claimedAt }) } });
+    assert.equal(result.completed, true); assert.equal(result.claimedToday, 0);
+  }
 });

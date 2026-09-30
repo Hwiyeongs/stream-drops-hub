@@ -28,7 +28,7 @@ beforeEach(()=>{
    else if(url.includes('sch.sooplive'))body={result:1,data:{list:soopLives,is_more:false}};
    else if(url.includes('gql.twitch.tv')){
      const {operationName}=JSON.parse(options?.body||'{}');
-     body=operationName==='HubDropsViewer'?{data:{currentUser:{login:'viewer'}}}:
+     body=operationName==='HubDropsViewer'?{data:{currentUser:{id:'user-1',login:'viewer'}}}:
        operationName==='HubDropsCampaigns'?{data:{currentUser:{dropCampaigns:[{id:'er',name:'이터널리턴 트위치',status:'ACTIVE',startAt:'2020-01-01T00:00:00Z',endAt:'2099-01-01T00:00:00Z',game:{id:'game',slug:'eternal-return',displayName:'Eternal Return'}}]}}}:
        operationName==='HubDropsInventory'?{data:{currentUser:{inventory:{dropCampaignsInProgress:twitchClaimed?[]:[{id:'er',timeBasedDrops:[{id:'reward',self:{isClaimed:false,currentMinutesWatched:twitchMinutes}}]}]}}}}:
        operationName==='Inventory'?{data:{currentUser:{inventory:{gameEventDrops:twitchAwards}}}}:
@@ -111,6 +111,18 @@ test('Twitch does not treat an aggregate award as proof of a claimed campaign',a
  assert.equal(data.collectorState.twitch.campaigns[0].completed,false);
  assert.equal(data.collectorState.twitch.campaigns[0].verificationPending,undefined);
  assert.match(data.collectorState.twitch.status,/재생 중/);
+});
+
+test('Twitch local receipt closes only its owned live even if the server returns zero progress', async () => {
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
+ tabs.push({id:99,windowId:1,url:'https://example.com',active:true});
+ await checkCollector(); assert.equal(tabs.length,2);
+ twitchMinutes=0;
+ data['handled:twitch_instance-1']={platform:'twitch',actionType:'claimed',twitchUserId:'user-1',
+   campaignId:'er',timeBasedDropId:'reward',dropInstanceId:'instance-1',claimedAt:Date.now()};
+ await checkCollector();
+ assert.deepEqual(tabs.map(t=>t.id),[99]);assert.equal(data.collectorState.twitch.campaigns[0].completed,true);
+ assert.equal(data.collectorState.twitch.claimedToday,1);assert.match(data.collectorState.twitch.status,/완료/);
 });
 test('obsolete Twitch manual choices do not prevent automatic collection',async()=>{
  data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;

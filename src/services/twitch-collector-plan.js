@@ -1,4 +1,6 @@
 import { fetchWithTimeout } from './fetch-helper.js';
+import { getHandledDropsLog } from './storage.js';
+import { dropsDay } from './drops-day.js';
 import { buildCapturedTwitchRequestHeaders, clearCapturedTwitchGqlHeaders, getCapturedTwitchGqlHeaders, waitForCapturedTwitchGqlHeaders } from './twitch-headers.js';
 
 const GQL_URL = 'https://gql.twitch.tv/gql';
@@ -6,7 +8,7 @@ const INVENTORY_URL = 'https://www.twitch.tv/drops/inventory';
 const CHANNEL = /^[a-z0-9_]{1,25}$/i;
 // These viewer-side fields are used by Twitch's own Drops pages. They may change;
 // malformed or failed responses must never be treated as an empty campaign list.
-const VIEWER = 'query HubDropsViewer { currentUser { login } }';
+const VIEWER = 'query HubDropsViewer { currentUser { id login } }';
 const CAMPAIGNS = `query HubDropsCampaigns { currentUser { dropCampaigns {
   id name status startAt endAt self { isAccountConnected } game { id slug displayName }
 } } }`;
@@ -38,13 +40,29 @@ function validLogin(value) { return typeof value === 'string' && CHANNEL.test(va
 function watched(drop) { return Number(drop?.self?.currentMinutesWatched) || 0; }
 function required(drop) { return Number(drop?.requiredMinutesWatched) || 0; }
 
-export function summarizeTwitchCampaign(detail, inventory, now = Date.now()) {
+function accountReceipts(handled, twitchUserId) {
+  return Object.values(handled || {}).filter(entry => entry?.platform === 'twitch' && entry.actionType === 'claimed' &&
+    twitchUserId && entry.twitchUserId && String(entry.twitchUserId) === String(twitchUserId));
+}
+function receivedToday(entry, now) {
+  return Number.isFinite(entry.claimedAt) && entry.claimedAt > 0 && entry.claimedAt <= now &&
+    dropsDay(entry.claimedAt) === dropsDay(now);
+}
+
+export function summarizeTwitchCampaign(detail, inventory, now = Date.now(), receiptContext = {}) {
   if (!detail?.id || !Array.isArray(detail.timeBasedDrops)) throw new Error('트위치 캠페인 보상 형식이 변경되었습니다.');
+  const receipts = accountReceipts(receiptContext.handled, receiptContext.twitchUserId)
+    .filter(entry => entry.campaignId && String(entry.campaignId) === String(detail.id));
+  let claimedToday = 0;
   const fresh = new Map((inventory?.timeBasedDrops || []).filter(d => d?.id).map(d => [d.id, d.self]));
   const drops = detail.timeBasedDrops.map(drop => {
     const inventorySelf = fresh.get(drop.id);
+    const receipt = receipts.find(entry => entry.timeBasedDropId && drop.id && String(entry.timeBasedDropId) === String(drop.id) &&
+      (!entry.dropInstanceId || !(inventorySelf?.dropInstanceID || drop.self?.dropInstanceID) ||
+        entry.dropInstanceId === (inventorySelf?.dropInstanceID || drop.self?.dropInstanceID)));
+    if (receipt && receivedToday(receipt, now)) claimedToday++;
+    const isClaimed = drop.self?.isClaimed === true || inventorySelf?.isClaimed === true || !!receipt;
     const currentMinutesWatched = Math.max(watched(drop), watched({ self: inventorySelf }));
-    const isClaimed = drop.self?.isClaimed === true || inventorySelf?.isClaimed === true;
     return { ...drop, self: { ...drop.self, ...inventorySelf,
       isClaimed, currentMinutesWatched } };
   });
@@ -59,7 +77,7 @@ export function summarizeTwitchCampaign(detail, inventory, now = Date.now()) {
   const minutes = drops.length ? drops.reduce((sum, drop) => sum + watched(drop), 0) : null;
   return { id: String(detail.id), title: String(detail.name || '트위치 이터널리턴 드롭스'), active,
     completed: drops.length > 0 && earned === drops.length, canWatch, watchable, claimable, needsLink, minutes,
-    earned, total: drops.length, endAt, game: detail.game,
+    earned, total: drops.length, claimedToday, endAt, game: detail.game,
     restricted: detail.allow?.isEnabled === true || (detail.allow?.isEnabled !== false && (detail.allow?.channels?.length || 0) > 0),
     allowed: detail.allow?.channels || [], lives: [] };
 }
@@ -141,7 +159,12 @@ export async function twitchPlan(now = Date.now(), currentChannel = null) {
     if (String(detail?.id) !== String(c.id) || !isEternalReturnGame(detail?.game)) throw new Error('트위치 캠페인 상세 정보가 일치하지 않습니다.');
     return detail;
   }));
-  const campaigns = details.map(detail => summarizeTwitchCampaign(detail, progress.get(String(detail.id)), now));
+  const handled = await getHandledDropsLog();
+  // Count confirmed receipts even if Twitch has already removed the campaign from its list.
+  const claimedToday = new Set(accountReceipts(handled, viewer.currentUser.id)
+    .filter(entry => entry.dropInstanceId && receivedToday(entry, now)).map(entry => entry.dropInstanceId)).size;
+  const campaigns = details.map(detail => summarizeTwitchCampaign(detail, progress.get(String(detail.id)), now,
+    { handled, twitchUserId: viewer.currentUser.id }));
   const liveQueries = new Map();
   for (const campaign of campaigns.filter(c => c.active && c.watchable)) {
     const allowed = campaign.allowed.map(c => c?.name?.toLowerCase()).filter(validLogin);
@@ -173,6 +196,7 @@ export async function twitchPlan(now = Date.now(), currentChannel = null) {
     }
   }
   const candidates = campaigns.filter(c => c.active && c.watchable).sort((a, b) => a.endAt - b.endAt || a.id.localeCompare(b.id));
-  return { login: login.toLowerCase(), campaigns, candidates, needsClaim: campaigns.some(c => c.claimable), needsLink: campaigns.some(c => c.needsLink),
+  return { login: login.toLowerCase(), campaigns, candidates, claimedToday,
+    needsClaim: campaigns.some(c => c.claimable), needsLink: campaigns.some(c => c.needsLink),
     finished: campaigns.length > 0 && campaigns.every(c => c.completed) };
 }

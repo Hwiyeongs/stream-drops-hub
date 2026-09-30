@@ -51,11 +51,15 @@ export async function claimUnifiedDrop(drop) {
     result = { success: true, itemCode: code.trim() };
     await recordHandledDrop({ ...drop, couponCode: code.trim() }, 'saved');
   } else {
-    if (drop.platform === 'twitch') result = await claimTwitchDrop(drop.dropInstanceId);
+    if (drop.platform === 'twitch') result = await claimTwitchDrop(drop.dropInstanceId, drop.twitchUserId);
     else if (drop.platform === 'chzzk') result = await claimChzzkDrop(drop.rewardNo);
     else throw new Error('지원하지 않는 플랫폼입니다.');
     if (result?.success !== true) throw new Error('수령 완료를 확인하지 못했습니다.');
-    await recordHandledDrop(drop, 'claimed');
+    const receipt = drop.platform === 'twitch' ? { ...drop,
+      twitchUserId: result.twitchUserId, twitchUserLogin: result.twitchUserLogin,
+      claimStatus: result.status, claimedAt: result.claimedAt,
+      claimConfirmedAt: result.claimConfirmedAt } : drop;
+    await recordHandledDrop(receipt, 'claimed');
   }
   // Remove only the confirmed item. Other failures remain visible and retryable.
   const cache = await getCachedDrops();

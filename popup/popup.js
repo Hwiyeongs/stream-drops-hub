@@ -1,4 +1,5 @@
 import { campaignDisplayDate } from '../src/services/campaign-date.js';
+import { dropsDay } from '../src/services/drops-day.js';
 import { request, fetchAllDrops, claimUnifiedDrop, saveSettings, recordHandledDrop } from '../src/services/client.js';
 import { getCachedDrops, getHandledDropsLog, getSettings, parseExpTimestamp, parseTimestamp, isRecentDate } from '../src/services/storage.js';
 
@@ -23,11 +24,14 @@ async function renderCollector() {
   el('collectorStatus').textContent = ['chzzk', 'twitch'].map(p => {
     const on = p === 'chzzk' ? settings.autoCollectChzzk : settings.autoCollectTwitch;
     const state = collectorState[p];
-    const fresh = Number.isFinite(state?.campaignsCheckedAt) && Date.now() - state.campaignsCheckedAt < 3 * 60000;
+    const fresh = Number.isFinite(state?.campaignsCheckedAt) && Date.now() - state.campaignsCheckedAt < 3 * 60000 &&
+      dropsDay(state.campaignsCheckedAt) === dropsDay();
     const campaigns = on && fresh && !state?.error ? (state?.campaigns || []).filter(c => c.active && !c.completed) : [];
     const status = !on ? '꺼짐' : state?.error ? state.status : !fresh ?
       (state?.userStopped ? '자동 시청 일시 중지됨 · 보관함 재확인 대기' : '보관함 재확인 대기') : state?.status || '확인 중…';
-    return (p === 'chzzk' ? '치지직: ' : '트위치: ') + status +
+    const today = p === 'twitch' && on && fresh && !state?.error && Number.isInteger(state.claimedToday) ?
+      ` · 오늘 허브 수령 ${state.claimedToday}개 (05시 기준)` : '';
+    return (p === 'chzzk' ? '치지직: ' : '트위치: ') + status + today +
       campaigns.map(c => `\n· ${c.title}: ${c.earned}/${c.total}개 달성`).join('');
   }).join('\n');
 }

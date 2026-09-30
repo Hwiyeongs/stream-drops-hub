@@ -32,10 +32,11 @@ const mockFetch = async (url, options = {}) => {
   if (url.endsWith('/integrity')) return json({});
   if (url.endsWith('/gql')) {
     const body = JSON.parse(options.body);
-    if (body.operationName === 'Inventory') return json({ data: { currentUser: { inventory: { dropCampaignsInProgress: campaigns } } } });
+    if (body.operationName === 'Inventory') return json({ data: { currentUser: { id: 'user-1', login: 'viewer', inventory: { dropCampaignsInProgress: campaigns } } } });
+    if (body.operationName === 'HubDropsClaimViewer') return json({ data: { currentUser: { id: 'user-1', login: 'viewer' } } });
     mutations.push(body.variables.input.dropInstanceID);
     if (mode === 'error') return json({ errors: [{ message: 'Temporary failure' }] });
-    return json({ data: { claimDropRewards: { status: mode === 'unknown' ? 'NOT_ELIGIBLE' : 'SUCCESS' } } });
+    return json({ data: { claimDropRewards: { status: mode === 'unknown' ? 'NOT_ELIGIBLE' : mode === 'already-claimed' ? 'DROP_INSTANCE_ALREADY_CLAIMED' : 'SUCCESS' } } });
   }
   if (url.endsWith('/drops/rewards/claims')) return json({ code: 200, content: { claimList: chzzkClaims } });
   if (url.includes('/coupon-code')) return json({ content: { code: mode === 'coupon-missing' ? null : 'TEST-CODE' } });
@@ -150,6 +151,7 @@ test('Twitch claim reuses integrity and session headers captured from a real Twi
   globalThis.fetch = async (url, options = {}) => {
     if (url.endsWith('/gql')) {
       const body = JSON.parse(options.body);
+      if (body.operationName === 'HubDropsClaimViewer') return mockFetch(url, options);
       if (body.operationName === 'Inventory') return json({ data: { currentUser: { inventory: { dropCampaignsInProgress: campaigns } } } });
       claimHeaders = options.headers;
       mutations.push(body.variables.input.dropInstanceID);
@@ -191,6 +193,7 @@ test('Twitch refreshes captured page headers after an integrity rejection and re
   globalThis.fetch = async (url, options = {}) => {
     if (!url.endsWith('/gql')) return mockFetch(url, options);
     const body = JSON.parse(options.body);
+    if (body.operationName === 'HubDropsClaimViewer') return mockFetch(url, options);
     gqlCalls++;
     if (gqlCalls === 1) {
       assert.equal(options.headers['Client-Integrity'], 'mock-integrity');
@@ -236,7 +239,55 @@ test('auto claim retries after transient failure and logs confirmed success', as
   await worker.pollDrops(); assert.equal(mutations.length, 1); // backoff
   data.claimRetries['twitch_instance-B'].nextAt = 0;
   mode = 'success'; await worker.pollDrops(); assert.equal(mutations.length, 2);
-  assert.equal((await storage.getHandledDropsLog())['twitch_instance-B'].actionType, 'claimed');
+  const entry = (await storage.getHandledDropsLog())['twitch_instance-B'];
+  assert.equal(entry.actionType, 'claimed'); assert.equal(entry.campaignId, 'campaign');
+  assert.equal(entry.timeBasedDropId, 'reward'); assert.equal(entry.twitchUserId, 'user-1');
+  assert.ok(Number.isFinite(entry.claimedAt));
+});
+
+test('manual Twitch claim records exact account, campaign and tier and feeds the collection plan', async () => {
+  campaigns = [campaign()];
+  await fetchAllDrops();
+  await worker.handleMessage({ type: 'CLAIM_DROP', id: 'twitch_instance-B' });
+  const entry = (await storage.getHandledDropsLog())['twitch_instance-B'];
+  assert.equal(entry.campaignId, 'campaign'); assert.equal(entry.timeBasedDropId, 'reward');
+  assert.equal(entry.dropInstanceId, 'instance-B'); assert.equal(entry.twitchUserId, 'user-1');
+  assert.equal(entry.claimStatus, 'SUCCESS'); assert.ok(entry.claimedAt <= Date.now());
+  assert.equal(entry.couponCode, null); assert.equal((await storage.getCachedDrops()).drops.length, 0);
+  const { summarizeTwitchCampaign } = await import('../src/services/twitch-collector-plan.js');
+  const result = summarizeTwitchCampaign({ ...campaign(), status: 'ACTIVE', startAt: '2020-01-01',
+    timeBasedDrops: [{ ...campaign().timeBasedDrops[0], self: null }] }, null, Date.now(),
+    { twitchUserId: 'user-1', handled: await storage.getHandledDropsLog() });
+  assert.equal(result.completed, true); assert.equal(result.claimedToday, 1);
+});
+
+test('Twitch account change is rejected before sending a claim mutation or writing history', async () => {
+  campaigns = [campaign()]; const drop = (await fetchTwitchDrops()).drops[0];
+  await assert.rejects(claimUnifiedDrop({ ...drop, twitchUserId: 'previous-user' }), /계정이 변경/);
+  assert.equal(mutations.length, 0); assert.equal(Object.keys(await storage.getHandledDropsLog()).length, 0);
+});
+
+test('an unverified Twitch claim account cannot send a mutation or create a receipt', async () => {
+  campaigns = [campaign()]; const drop = (await fetchTwitchDrops()).drops[0];
+  globalThis.fetch = async (url, options) => JSON.parse(options.body).operationName === 'HubDropsClaimViewer' ?
+    json({ data: { currentUser: null } }) : mockFetch(url, options);
+  await assert.rejects(claimUnifiedDrop(drop), /수령 계정을 확인하지/);
+  assert.equal(mutations.length, 0); assert.equal(Object.keys(await storage.getHandledDropsLog()).length, 0);
+});
+
+test('failed Twitch claim leaves the card and never writes a completed receipt', async () => {
+  campaigns = [campaign()]; await fetchAllDrops(); mode = 'unknown';
+  await assert.rejects(worker.handleMessage({ type: 'CLAIM_DROP', id: 'twitch_instance-B' }), /NOT_ELIGIBLE/);
+  assert.equal(Object.keys(await storage.getHandledDropsLog()).length, 0);
+  assert.equal((await storage.getCachedDrops()).drops.length, 1);
+});
+
+test('already-claimed Twitch receipt preserves completion without inventing its claim date', async () => {
+  campaigns = [campaign()]; const drop = (await fetchTwitchDrops()).drops[0]; mode = 'already-claimed';
+  await claimUnifiedDrop(drop);
+  const entry = (await storage.getHandledDropsLog())[drop.id];
+  assert.equal(entry.actionType, 'claimed'); assert.equal(entry.claimedAt, null);
+  assert.ok(Number.isFinite(entry.claimConfirmedAt)); assert.equal(entry.twitchUserId, 'user-1');
 });
 test('discovery while auto claim disabled does not block enabling later', async () => {
   campaigns = [campaign()];
