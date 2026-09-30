@@ -53,7 +53,15 @@ async function linkLegacyReceipts(handled, details, progress, twitchUserId) {
   for (const campaign of details) {
     for (const drop of campaign.timeBasedDrops || []) {
       const fresh = progress.get(String(campaign.id))?.timeBasedDrops?.find(d => String(d.id) === String(drop.id));
-      const instance = fresh?.self?.dropInstanceID || drop.self?.dropInstanceID;
+      let instance = fresh?.self?.dropInstanceID || drop.self?.dropInstanceID;
+      // Claimed tiers can lose self entirely. BetterTTV uses this complete identity
+      // when Twitch omits the instance: https://github.com/night/betterttv/blob/master/src/modules/auto_claim/index.js
+      // Compare only against an existing successful receipt; never use it to claim
+      // a reward, match a name, or override a different server-provided instance.
+      const parts = [twitchUserId, campaign.id, drop.id];
+      if (!instance && parts.every(part => part != null && String(part).length > 0 && !String(part).includes('#'))) {
+        instance = parts.map(String).join('#');
+      }
       if (!instance || !drop.id) continue;
       const identity = { twitchUserId: String(twitchUserId), campaignId: String(campaign.id),
         timeBasedDropId: String(drop.id), dropInstanceId: instance };

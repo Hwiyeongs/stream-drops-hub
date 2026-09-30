@@ -135,6 +135,23 @@ test('Twitch inventory achievement waits for claiming and distinguishes earned f
  const c=data.collectorState.twitch.campaigns[0];
  assert.equal(c.earned,1);assert.equal(c.claimed,0);assert.equal(c.pending,1);assert.equal(c.completed,false);
 });
+
+test('Twitch legacy composite receipt stops a redundant owned live without changing its original dates', async () => {
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
+ tabs.push({id:99,windowId:1,url:'https://example.com',active:true});
+ await checkCollector();assert.equal(tabs.length,2);
+ twitchMinutes=0;
+ const receivedAt=Date.now()-1000;
+ const old={id:'twitch_user-1#er#reward',platform:'twitch',actionType:'claimed',
+   dropInstanceId:'user-1#er#reward',receivedAt,handledAt:receivedAt+1,rewardName:'Emotion_englishnoob'};
+ data['handled:'+old.id]=structuredClone(old);
+ await checkCollector();
+ assert.deepEqual(tabs.map(t=>t.id),[99]);assert.equal(data.collectorState.twitch.campaigns[0].completed,true);
+ assert.equal(data.collectorState.twitch.campaigns[0].claimed,1);
+ assert.equal(data.collectorState.twitch.claimedToday,1);assert.match(data.collectorState.twitch.status,/완료/);
+ assert.equal(data['handled:'+old.id].receiptIdentityVerified,true);
+ for(const key of Object.keys(old))assert.deepEqual(data['handled:'+old.id][key],old[key]);
+});
 test('obsolete Twitch manual choices do not prevent automatic collection',async()=>{
  data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
  twitchMinutes=0;

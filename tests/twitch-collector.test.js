@@ -323,6 +323,74 @@ test('legacy receipts with a different instance or known different account canno
   }
 });
 
+test('legacy claimed receipt with complete composite identity survives the server removing its instance', async () => {
+  const receivedAt = Date.parse('2026-09-30T16:00:00+09:00');
+  const instance = 'user-1#er-1#reward-1';
+  const old = { id: 'twitch_' + instance, platform: 'twitch', actionType: 'claimed',
+    dropInstanceId: instance, rewardName: 'Emotion_englishnoob', campaignName: 'よむERカスタム',
+    receivedAt, handledAt: receivedAt + 10 };
+  localData['handled:' + old.id] = structuredClone(old);
+  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress = [];
+  pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0].self = null;
+  const now = Date.parse('2026-09-30T17:00:00+09:00');
+  const plan = await twitchPlan(now);
+  assert.equal(plan.finished, true); assert.equal(plan.campaigns[0].claimed, 1);
+  assert.equal(plan.campaigns[0].pending, 0); assert.equal(plan.claimedToday, 1);
+  assert.equal(plan.candidates.length, 0);
+  assert.equal(requested.some(r => r.operationName === 'HubDropsGameLives'), false);
+  const linked = localData['handled:' + old.id];
+  assert.equal(linked.twitchUserId, 'user-1'); assert.equal(linked.campaignId, 'er-1');
+  assert.equal(linked.timeBasedDropId, 'reward-1'); assert.equal(linked.receiptIdentityVerified, true);
+  for (const key of Object.keys(old)) assert.deepEqual(linked[key], old[key], key);
+  assert.equal(linked.claimedAt, undefined);
+  const afterReset = await twitchPlan(Date.parse('2026-10-01T05:00:00+09:00'));
+  assert.equal(afterReset.finished, true); assert.equal(afterReset.claimedToday, 0);
+});
+
+test('composite identity rejects different accounts, campaigns, tiers and authoritative instances', async () => {
+  for (const instance of ['other-user#er-1#reward-1', 'user-1#old-campaign#reward-1',
+    'user-1#er-1#old-tier', 'opaque-instance', 'user-1#er-1#reward-1#extra']) {
+    localData = {};
+    const old = { id: 'twitch_' + instance, platform: 'twitch', actionType: 'claimed',
+      dropInstanceId: instance, rewardName: 'Same name', receivedAt: Date.now() };
+    localData['handled:' + old.id] = structuredClone(old);
+    pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress = [];
+    pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0].self = null;
+    assert.equal((await twitchPlan()).finished, false, instance);
+    assert.deepEqual(localData['handled:' + old.id], old);
+  }
+  const instance = 'user-1#er-1#reward-1';
+  const old = { id: 'twitch_' + instance, platform: 'twitch', actionType: 'claimed',
+    dropInstanceId: instance, receivedAt: Date.now() };
+  localData = { ['handled:' + old.id]: structuredClone(old) };
+  for (const source of ['detail', 'inventory']) {
+    pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0].self = source === 'detail' ? { dropInstanceID: 'different-instance' } : null;
+    pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress = source === 'inventory' ?
+      [{ id: 'er-1', timeBasedDrops: [{ id: 'reward-1', self: { dropInstanceID: 'different-instance' } }] }] : [];
+    assert.equal((await twitchPlan()).finished, false, source);
+    assert.deepEqual(localData['handled:' + old.id], old);
+  }
+});
+
+test('one legacy composite token receipt completes only its own tier and rejects identity conflicts', async () => {
+  const instance = 'user-1#er-1#reward-1';
+  const old = { id: 'twitch_' + instance, platform: 'twitch', actionType: 'claimed', receivedAt: Date.now() };
+  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress = [];
+  pages.HubDropsDetails.user.dropCampaign.timeBasedDrops = [1, 2, 3].map(i => ({
+    id: 'reward-' + i, name: 'Drops Token', requiredMinutesWatched: 60, self: null }));
+  localData['handled:' + old.id] = structuredClone(old);
+  const plan = await twitchPlan();
+  assert.equal(plan.campaigns[0].claimed, 1); assert.equal(plan.campaigns[0].earned, 1);
+  assert.equal(plan.campaigns[0].total, 3); assert.equal(plan.finished, false);
+  for (const extra of [{ actionType: 'saved' }, { twitchUserId: 'other-user' }, { campaignId: 'other-campaign' },
+    { timeBasedDropId: 'other-tier' }, { dropInstanceId: 'different-instance' }]) {
+    const conflicting = { ...old, ...extra };
+    localData['handled:' + old.id] = structuredClone(conflicting);
+    assert.equal((await twitchPlan()).campaigns[0].claimed, 0);
+    assert.deepEqual(localData['handled:' + old.id], conflicting);
+  }
+});
+
 test('three claimable tokens count as achieved and pending, without pretending they were claimed', async () => {
   const drops = [1, 2, 3].map(i => ({ id: 'reward-' + i, requiredMinutesWatched: 60,
     self: { isClaimed: false, currentMinutesWatched: 60, dropInstanceID: 'instance-' + i } }));
