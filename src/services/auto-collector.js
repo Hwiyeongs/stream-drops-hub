@@ -376,8 +376,9 @@ async function run() {
         await twitchPlan(Date.now(), session.liveKey?.startsWith('twitch:') ? session.liveKey.slice(7) : null);
       delete session.account;
       session.campaigns = plan.campaigns.map(c => ({ id:c.id, title:c.title, completed:c.completed, active:c.active,
-        minutes:c.minutes, earned:c.earned, total:c.total, claimedToday:c.claimedToday, endAt:c.endAt }));
-      if (platform === 'twitch') session.claimedToday = plan.claimedToday;
+        minutes:c.minutes, earned:c.earned, claimed:c.claimed, pending:c.pending, total:c.total,
+        claimedToday:c.claimedToday, endAt:c.endAt }));
+      if (platform === 'twitch') { session.claimedToday = plan.claimedToday; session.twitchUserId = plan.twitchUserId; }
       session.campaignsCheckedAt = Date.now();
       session.error = null;
       if (plan.catalog) session.catalog = plan.catalog;

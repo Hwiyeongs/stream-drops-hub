@@ -104,3 +104,42 @@ export async function recordHandledDrop(drop, actionType = 'claimed') {
   return entry;
 }
 export async function isDropHandled(id) { return !!(await getHandledDropsLog())[id]; }
+
+/** Add verified identity to an existing receipt without changing any historical dates. */
+export async function linkTwitchReceipt(id, identity) {
+  const key = HANDLED + id;
+  const previous = (await chrome.storage.local.get(key))[key];
+  if (previous?.platform !== 'twitch' || previous.actionType !== 'claimed') return null;
+  for (const field of ['twitchUserId', 'campaignId', 'timeBasedDropId', 'dropInstanceId']) {
+    if (!identity[field] || (previous[field] && String(previous[field]) !== String(identity[field]))) return null;
+  }
+  const entry = { ...previous };
+  for (const field of ['twitchUserId', 'campaignId', 'timeBasedDropId', 'dropInstanceId']) if (!entry[field]) entry[field] = String(identity[field]);
+  entry.receiptIdentityVerified = true;
+  await chrome.storage.local.set({ [key]: entry });
+  return entry;
+}
+
+/** A user-copyable status report: field presence and states, never credentials or raw account/instance IDs. */
+export async function getTwitchStatusReport() {
+  const [{ collectorState = {} }, handled, cache] = await Promise.all([
+    chrome.storage.local.get('collectorState'), getHandledDropsLog(), getCachedDrops(),
+  ]);
+  const state = collectorState.twitch || {};
+  const describe = entry => ({ reward: entry.rewardName || null, campaign: entry.campaignName || null,
+    action: entry.actionType || entry.status || null,
+    receivedAt: entry.receivedAt ?? null, claimedAt: entry.claimedAt ?? null,
+    hasAccountId: !!entry.twitchUserId, hasCampaignId: !!entry.campaignId,
+    hasDropId: !!entry.timeBasedDropId, hasInstanceId: !!entry.dropInstanceId,
+    accountMatches: state.twitchUserId && entry.twitchUserId ? String(state.twitchUserId) === String(entry.twitchUserId) : null,
+    identityVerified: entry.receiptIdentityVerified === true });
+  return { version: chrome.runtime.getManifest().version, checkedAt: state.campaignsCheckedAt ?? null,
+    status: state.status || null, queryFailed: !!state.error,
+    todayReceiptCount: state.claimedToday ?? null,
+    campaigns: (state.campaigns || []).map(c => ({ title: c.title, active: c.active, completed: c.completed,
+      earned: c.earned, claimed: c.claimed, pending: c.pending, total: c.total })),
+    receipts: Object.values(handled).filter(d => d?.platform === 'twitch')
+      .sort((a, b) => (b.receivedAt || b.handledAt || 0) - (a.receivedAt || a.handledAt || 0)).slice(0, 20).map(describe),
+    cacheCheckedAt: cache.lastUpdated, pendingCards: cache.drops.filter(d => d.platform === 'twitch')
+      .slice(0, 20).map(d => ({ ...describe(d), stale: d.stale === true })) };
+}

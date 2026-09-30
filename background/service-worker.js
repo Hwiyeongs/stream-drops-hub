@@ -3,7 +3,7 @@ import { fetchCampaignCatalog } from '../src/services/collector-plans.js';
 import { registerTwitchHeaderCapture } from '../src/services/twitch-headers.js';
 import { LIVE_ALARM, ensureLiveAlarm, checkLiveMonitor, openLiveNotification } from '../src/services/live-monitor.js';
 import { fetchAllDrops, claimUnifiedDrop } from '../src/services/aggregator.js';
-import { getSettings, saveSettings, initializeStorage, getCachedDrops, getHandledDropsLog, recordHandledDrop } from '../src/services/storage.js';
+import { getSettings, saveSettings, initializeStorage, getCachedDrops, getHandledDropsLog, recordHandledDrop, getTwitchStatusReport } from '../src/services/storage.js';
 
 registerTwitchHeaderCapture();
 
@@ -124,6 +124,7 @@ export async function handleMessage(message) {
       return catalog;
     }
     case 'GET_STATE': return { ...await getCachedDrops(), settings: await getSettings() };
+    case 'GET_TWITCH_STATUS_REPORT': return getTwitchStatusReport();
     case 'REFRESH_ALL': return fetchAllDrops();
     case 'CLAIM_DROP': return claimById(message.id);
     case 'RECORD_COPIED': {

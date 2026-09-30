@@ -12,6 +12,7 @@ globalThis.chrome={
  scripting:{async executeScript(){actions.push(['play',video]);return [{result:{state:video}}];}},runtime:{getURL:p=>p},notifications:{async create(){}},
 };
 chrome.storage.session={async get(){return {twitchGqlHeaders:{at:Date.now(),headers:{Authorization:'OAuth test','Client-Integrity':'test'}}};},async remove(){}};
+chrome.cookies={async get(){return {value:'test'};},async getAll(){return [];}};
 const {checkCollector,ensureCollectorAlarm,chooseTarget}=await import('../src/services/auto-collector.js');
 const {campaignProgress}=await import('../src/services/collector-plans.js');
 beforeEach(()=>{
@@ -31,7 +32,7 @@ beforeEach(()=>{
      body=operationName==='HubDropsViewer'?{data:{currentUser:{id:'user-1',login:'viewer'}}}:
        operationName==='HubDropsCampaigns'?{data:{currentUser:{dropCampaigns:[{id:'er',name:'이터널리턴 트위치',status:'ACTIVE',startAt:'2020-01-01T00:00:00Z',endAt:'2099-01-01T00:00:00Z',game:{id:'game',slug:'eternal-return',displayName:'Eternal Return'}}]}}}:
        operationName==='HubDropsInventory'?{data:{currentUser:{inventory:{dropCampaignsInProgress:twitchClaimed?[]:[{id:'er',timeBasedDrops:[{id:'reward',self:{isClaimed:false,currentMinutesWatched:twitchMinutes}}]}]}}}}:
-       operationName==='Inventory'?{data:{currentUser:{inventory:{gameEventDrops:twitchAwards}}}}:
+       operationName==='Inventory'?{data:{currentUser:{id:'user-1',inventory:{dropCampaignsInProgress:twitchClaimed?[]:[{id:'er',timeBasedDrops:[{id:'reward',self:{isClaimed:false,currentMinutesWatched:twitchMinutes}}]}]}}}}:
        operationName==='HubDropsDetails'?{data:{user:{dropCampaign:{id:'er',name:'이터널리턴 트위치',status:'ACTIVE',startAt:'2020-01-01T00:00:00Z',endAt:'2099-01-01T00:00:00Z',game:{id:'game',slug:'eternal-return',displayName:'Eternal Return'},allow:{channels:[]},timeBasedDrops:[{id:'reward',requiredMinutesWatched:60,benefitEdges:[{benefit:{id:'token'}}],self:{isClaimed:twitchClaimed,currentMinutesWatched:twitchMinutes}}]}}}}:
        operationName==='HubDropsGameLives'?{data:{game:{id:'game',streams:{edges:twitchLives}}}}:null;
      if(!body)throw Error(operationName);
@@ -123,6 +124,16 @@ test('Twitch local receipt closes only its owned live even if the server returns
  await checkCollector();
  assert.deepEqual(tabs.map(t=>t.id),[99]);assert.equal(data.collectorState.twitch.campaigns[0].completed,true);
  assert.equal(data.collectorState.twitch.claimedToday,1);assert.match(data.collectorState.twitch.status,/완료/);
+});
+
+test('Twitch inventory achievement waits for claiming and distinguishes earned from claimed counts', async () => {
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
+ await checkCollector();assert.equal(tabs.length,1);
+ twitchMinutes=60;
+ await checkCollector();
+ assert.equal(tabs.length,0);assert.match(data.collectorState.twitch.status,/수령 대기/);
+ const c=data.collectorState.twitch.campaigns[0];
+ assert.equal(c.earned,1);assert.equal(c.claimed,0);assert.equal(c.pending,1);assert.equal(c.completed,false);
 });
 test('obsolete Twitch manual choices do not prevent automatic collection',async()=>{
  data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;

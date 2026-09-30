@@ -93,7 +93,7 @@ export function decodeInventoryResponse(json) {
   return { loggedIn: true, campaigns: campaigns || [], error: null, retry: false };
 }
 
-export async function fetchTwitchDrops() {
+export async function fetchTwitchInventory() {
   const authToken = await getTwitchAuthToken();
   if (!authToken) {
     return {
@@ -144,7 +144,9 @@ export async function fetchTwitchDrops() {
   }
 
   // 2. Fallback approach: Valid raw GraphQL query conforming to Twitch schema
-  if (decodeInventoryResponse(json).retry) {
+  const primaryViewer = (Array.isArray(json) ? json[0] : json)?.data?.currentUser;
+  const primaryStatus = decodeInventoryResponse(json);
+  if (primaryStatus.retry || (primaryStatus.loggedIn === true && !primaryViewer?.id)) {
     const rawQuery = `
       query Inventory {
         currentUser {
@@ -223,9 +225,18 @@ export async function fetchTwitchDrops() {
 
   const decoded = decodeInventoryResponse(json);
   if (decoded.error) return { loggedIn: decoded.loggedIn, drops: [], error: decoded.error };
-  const campaigns = decoded.campaigns;
   const envelope = Array.isArray(json) ? json[0] : json;
   const viewer = envelope?.data?.currentUser;
+  if (!viewer?.id) return { loggedIn: null, drops: [], error: '트위치 보관함의 조회 계정을 확인하지 못했습니다. 다시 조회해 주세요.' };
+  return { loggedIn: true, campaigns: decoded.campaigns, error: null,
+    twitchUserId: viewer?.id == null ? null : String(viewer.id),
+    twitchUserLogin: typeof viewer?.login === 'string' ? viewer.login.toLowerCase() : null };
+}
+
+export async function fetchTwitchDrops() {
+  const inventory = await fetchTwitchInventory();
+  if (inventory.error) return { loggedIn: inventory.loggedIn, drops: [], error: inventory.error };
+  const campaigns = inventory.campaigns;
   const now = new Date();
   const drops = [];
 
@@ -273,8 +284,8 @@ export async function fetchTwitchDrops() {
         campaignName: campaign.name,
         campaignId: campaign.id == null ? null : String(campaign.id),
         timeBasedDropId: timeDrop.id == null ? null : String(timeDrop.id),
-        twitchUserId: viewer?.id == null ? null : String(viewer.id),
-        twitchUserLogin: typeof viewer?.login === 'string' ? viewer.login.toLowerCase() : null,
+        twitchUserId: inventory.twitchUserId,
+        twitchUserLogin: inventory.twitchUserLogin,
         campaignDate: twitchDisplayDate(campaign.name, timeDrop.startAt, campaign.startAt, campaign.endAt),
         rewardName,
         rewardImageUrl,

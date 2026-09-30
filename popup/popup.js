@@ -30,9 +30,10 @@ async function renderCollector() {
     const status = !on ? '꺼짐' : state?.error ? state.status : !fresh ?
       (state?.userStopped ? '자동 시청 일시 중지됨 · 보관함 재확인 대기' : '보관함 재확인 대기') : state?.status || '확인 중…';
     const today = p === 'twitch' && on && fresh && !state?.error && Number.isInteger(state.claimedToday) ?
-      ` · 오늘 허브 수령 ${state.claimedToday}개 (05시 기준)` : '';
+      ` · 오늘 허브 수령 기록 ${state.claimedToday}개 (05시 기준)` : '';
     return (p === 'chzzk' ? '치지직: ' : '트위치: ') + status + today +
-      campaigns.map(c => `\n· ${c.title}: ${c.earned}/${c.total}개 달성`).join('');
+      campaigns.map(c => `\n· ${c.title}: ${c.earned}/${c.total}개 달성` +
+        (p === 'twitch' && Number.isInteger(c.claimed) ? ` · 수령 완료 ${c.claimed}개 · 수령 대기 ${c.pending || 0}개` : '')).join('');
   }).join('\n');
 }
 function enableSettingControls() {
@@ -244,6 +245,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     finally { el('refreshCampaigns').disabled = false; }
   });
   el('refreshBtn').addEventListener('click', refresh);
+  el('copyTwitchStatus').addEventListener('click', async () => {
+    try {
+      const report = await request('GET_TWITCH_STATUS_REPORT');
+      await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+      toast('트위치 상태 진단을 복사했습니다.', 'success');
+    } catch (error) { toast(error.message, 'error'); }
+  });
   el('claimAllBtn').addEventListener('click', async () => {
     if (busy()) return;
     claiming = true; render();

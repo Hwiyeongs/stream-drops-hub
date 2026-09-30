@@ -1,5 +1,6 @@
 import { fetchWithTimeout } from './fetch-helper.js';
-import { getHandledDropsLog } from './storage.js';
+import { getHandledDropsLog, linkTwitchReceipt } from './storage.js';
+import { fetchTwitchInventory } from './twitch.js';
 import { dropsDay } from './drops-day.js';
 import { buildCapturedTwitchRequestHeaders, clearCapturedTwitchGqlHeaders, getCapturedTwitchGqlHeaders, waitForCapturedTwitchGqlHeaders } from './twitch-headers.js';
 
@@ -20,9 +21,6 @@ const DETAILS = `query HubDropsDetails($login: String!, $id: ID!) {
       self { isClaimed currentMinutesWatched dropInstanceID } }
   } }
 }`;
-const INVENTORY = `query HubDropsInventory { currentUser { inventory { dropCampaignsInProgress {
-  id timeBasedDrops { id self { isClaimed currentMinutesWatched dropInstanceID } }
-} } } }`;
 const ALLOWED_LIVES = `query HubDropsAllowedLives($logins: [String!]) {
   users(logins: $logins) { login stream { id viewersCount game { id } } }
 }`;
@@ -45,8 +43,33 @@ function accountReceipts(handled, twitchUserId) {
     twitchUserId && entry.twitchUserId && String(entry.twitchUserId) === String(twitchUserId));
 }
 function receivedToday(entry, now) {
-  return Number.isFinite(entry.claimedAt) && entry.claimedAt > 0 && entry.claimedAt <= now &&
-    dropsDay(entry.claimedAt) === dropsDay(now);
+  const at = entry.claimedAt ?? (entry.receiptIdentityVerified && !entry.claimStatus ? entry.receivedAt ?? entry.handledAt : null);
+  return Number.isFinite(at) && at > 0 && at <= now && dropsDay(at) === dropsDay(now);
+}
+
+async function linkLegacyReceipts(handled, details, progress, twitchUserId) {
+  if (!twitchUserId) return;
+  const instances = new Map();
+  for (const campaign of details) {
+    for (const drop of campaign.timeBasedDrops || []) {
+      const fresh = progress.get(String(campaign.id))?.timeBasedDrops?.find(d => String(d.id) === String(drop.id));
+      const instance = fresh?.self?.dropInstanceID || drop.self?.dropInstanceID;
+      if (!instance || !drop.id) continue;
+      const identity = { twitchUserId: String(twitchUserId), campaignId: String(campaign.id),
+        timeBasedDropId: String(drop.id), dropInstanceId: instance };
+      if (instances.has(instance) && JSON.stringify(instances.get(instance)) !== JSON.stringify(identity)) instances.set(instance, null);
+      else if (!instances.has(instance)) instances.set(instance, identity);
+    }
+  }
+  for (const [id, entry] of Object.entries(handled)) {
+    if (entry?.platform !== 'twitch' || entry.actionType !== 'claimed') continue;
+    if (entry.twitchUserId && entry.campaignId && entry.timeBasedDropId) continue;
+    const instance = entry.dropInstanceId || (id.startsWith('twitch_') ? id.slice(7) : null);
+    const identity = instances.get(instance);
+    if (!identity) continue;
+    const linked = await linkTwitchReceipt(id, identity);
+    if (linked) handled[id] = linked;
+  }
 }
 
 export function summarizeTwitchCampaign(detail, inventory, now = Date.now(), receiptContext = {}) {
@@ -68,7 +91,9 @@ export function summarizeTwitchCampaign(detail, inventory, now = Date.now(), rec
   });
   const startAt = Date.parse(detail.startAt), endAt = Date.parse(detail.endAt);
   const active = detail.status === 'ACTIVE' && Number.isFinite(startAt) && Number.isFinite(endAt) && startAt <= now && now < endAt;
-  const earned = drops.filter(d => d.self?.isClaimed === true).length;
+  const claimed = drops.filter(d => d.self?.isClaimed === true).length;
+  const pending = drops.filter(d => !d.self?.isClaimed && required(d) > 0 && watched(d) >= required(d)).length;
+  const earned = claimed + pending;
   const claimable = drops.some(d => !d.self?.isClaimed && required(d) > 0 && watched(d) >= required(d));
   const needsLink = detail.self?.isAccountConnected === false;
   // A completed tier often needs claiming before Twitch advances the next one.
@@ -76,8 +101,8 @@ export function summarizeTwitchCampaign(detail, inventory, now = Date.now(), rec
   const watchable = !claimable && canWatch;
   const minutes = drops.length ? drops.reduce((sum, drop) => sum + watched(drop), 0) : null;
   return { id: String(detail.id), title: String(detail.name || '트위치 이터널리턴 드롭스'), active,
-    completed: drops.length > 0 && earned === drops.length, canWatch, watchable, claimable, needsLink, minutes,
-    earned, total: drops.length, claimedToday, endAt, game: detail.game,
+    completed: drops.length > 0 && claimed === drops.length, canWatch, watchable, claimable, needsLink, minutes,
+    earned, claimed, pending, total: drops.length, claimedToday, endAt, game: detail.game,
     restricted: detail.allow?.isEnabled === true || (detail.allow?.isEnabled !== false && (detail.allow?.channels?.length || 0) > 0),
     allowed: detail.allow?.channels || [], lives: [] };
 }
@@ -143,12 +168,17 @@ export async function twitchPlan(now = Date.now(), currentChannel = null) {
   const [viewer, listed, inventory] = await Promise.all([
     gql(capture, 'HubDropsViewer', VIEWER),
     gql(capture, 'HubDropsCampaigns', CAMPAIGNS),
-    gql(capture, 'HubDropsInventory', INVENTORY),
+    fetchTwitchInventory(),
   ]);
   const login = viewer.currentUser?.login;
-  if (!validLogin(login) || !listed.currentUser || !inventory.currentUser) throw new Error('트위치 로그인이 필요합니다.');
+  if (!validLogin(login) || !listed.currentUser) throw new Error('트위치 로그인이 필요합니다.');
+  if (inventory.error) throw new Error(inventory.error);
+  if (inventory.twitchUserId && viewer.currentUser.id && String(inventory.twitchUserId) !== String(viewer.currentUser.id)) {
+    await clearCapturedTwitchGqlHeaders();
+    throw new Error('트위치 보관함과 캠페인 조회의 로그인 계정이 다릅니다. 다음 확인에서 인증 정보를 갱신합니다.');
+  }
   const rawList = listed.currentUser.dropCampaigns;
-  const inventoryList = inventory.currentUser.inventory?.dropCampaignsInProgress;
+  const inventoryList = inventory.campaigns;
   if (rawList !== null && !Array.isArray(rawList)) throw new Error('트위치 캠페인 목록 형식이 변경되었습니다.');
   if (inventoryList !== null && !Array.isArray(inventoryList)) throw new Error('트위치 보관함 형식이 변경되었습니다.');
   const progress = new Map((inventoryList || []).filter(c => c?.id).map(c => [String(c.id), c]));
@@ -160,6 +190,7 @@ export async function twitchPlan(now = Date.now(), currentChannel = null) {
     return detail;
   }));
   const handled = await getHandledDropsLog();
+  await linkLegacyReceipts(handled, details, progress, viewer.currentUser.id);
   // Count confirmed receipts even if Twitch has already removed the campaign from its list.
   const claimedToday = new Set(accountReceipts(handled, viewer.currentUser.id)
     .filter(entry => entry.dropInstanceId && receivedToday(entry, now)).map(entry => entry.dropInstanceId)).size;
@@ -196,7 +227,7 @@ export async function twitchPlan(now = Date.now(), currentChannel = null) {
     }
   }
   const candidates = campaigns.filter(c => c.active && c.watchable).sort((a, b) => a.endAt - b.endAt || a.id.localeCompare(b.id));
-  return { login: login.toLowerCase(), campaigns, candidates, claimedToday,
+  return { login: login.toLowerCase(), twitchUserId: viewer.currentUser.id, campaigns, candidates, claimedToday,
     needsClaim: campaigns.some(c => c.claimable), needsLink: campaigns.some(c => c.needsLink),
     finished: campaigns.length > 0 && campaigns.every(c => c.completed) };
 }

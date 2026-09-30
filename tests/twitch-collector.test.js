@@ -27,8 +27,10 @@ beforeEach(() => {
     HubDropsAllowedLives: { users: [] },
   };
   globalThis.chrome = {
+    cookies: { async get() { return { value: 'test' }; }, async getAll() { return []; } },
     storage: { session: { async get() { return { twitchGqlHeaders: capture }; }, async remove() { capture = null; } },
-      local: { async get(key) { return key == null ? structuredClone(localData) : { [key]: localData[key] }; } } },
+      local: { async get(key) { return key == null ? structuredClone(localData) : { [key]: localData[key] }; },
+        async set(value) { Object.assign(localData, structuredClone(value)); } } },
     tabs: { async create(options) { tabActions.push(['create', options]); return { id: 7, ...options }; },
       async update(id, options) { tabActions.push(['update', id, options]); },
       async get() { return { id: 7, url: 'https://www.twitch.tv/drops/inventory' }; },
@@ -37,6 +39,9 @@ beforeEach(() => {
   globalThis.fetch = async (_url, options) => {
     const { operationName, variables, query } = JSON.parse(options.body);
     requested.push({ operationName, variables, query });
+    if (operationName === 'Inventory') return new Response(JSON.stringify({ data: {
+      currentUser: { id: pages.HubDropsViewer.currentUser.id, ...pages.HubDropsInventory.currentUser },
+    } }));
     if (operationName === 'Inventory' && awardedRejected)
       return new Response(JSON.stringify({ errors: [{ message: 'PersistedQueryNotFound' }] }));
     return new Response(JSON.stringify({ data: pages[operationName] }));
@@ -49,8 +54,8 @@ test('Twitch plan chooses an Eternal Return Drops-enabled live and uses server p
   assert.equal(plan.campaigns[0].minutes, 15);
   assert.equal(plan.candidates[0].lives[0].url, 'https://www.twitch.tv/er_streamer');
   assert.equal(requested.filter(r => r.operationName === 'HubDropsDetails').length, 1);
-  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 0);
-  assert.equal(requested.find(r => r.operationName === 'HubDropsInventory').query.includes('gameEventDrops'), false);
+  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 1);
+  assert.equal(requested.some(r => r.operationName === 'HubDropsInventory'), false);
   assert.equal(tabActions.length, 0);
 });
 
@@ -123,7 +128,7 @@ test('a recent aggregate benefit award does not prove the campaign tier was clai
   assert.equal(plan.campaigns[0].verificationPending, undefined);
   assert.equal(plan.candidates.length, 1);
   assert.equal(plan.finished, false);
-  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 0);
+  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 1);
 });
 
 test('a campaign without a tier requiring watch time cannot open a stream', async () => {
@@ -146,7 +151,7 @@ test('unavailable aggregate award history cannot block a new zero-progress campa
   assert.equal(plan.campaigns[0].completed, false);
   assert.equal(plan.candidates.length, 1);
   assert.equal(plan.needsVerification, undefined);
-  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 0);
+  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 1);
 });
 
 test('a new unclaimed campaign can still start when the award inventory is available and empty', async () => {
@@ -197,7 +202,7 @@ test('missing campaign or inventory field is an error, not an empty completed pl
   await assert.rejects(twitchPlan(), /캠페인 목록 형식/);
   pages.HubDropsCampaigns.currentUser.dropCampaigns = [campaign()];
   delete pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress;
-  await assert.rejects(twitchPlan(), /보관함 형식/);
+  await assert.rejects(twitchPlan(), /보관함 목록/);
 });
 
 test('Twitch plan rejects malformed broadcast addresses and unrelated categories', () => {
@@ -286,4 +291,63 @@ test('already-claimed or unknown original dates prove completion without claimin
       { twitchUserId: 'user-1', handled: { entry: receipt({ claimedAt }) } });
     assert.equal(result.completed, true); assert.equal(result.claimedToday, 0);
   }
+});
+
+test('legacy receipt is linked only by the server exact instance and all original dates remain unchanged', async () => {
+  const receivedAt = Date.now() - 5000;
+  const old = { id: 'twitch_old-instance', platform: 'twitch', actionType: 'claimed',
+    rewardName: 'Emoticon englishnoob', receivedAt, handledAt: receivedAt + 1 };
+  localData['handled:twitch_old-instance'] = structuredClone(old);
+  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress[0].timeBasedDrops[0].self.dropInstanceID = 'old-instance';
+  const plan = await twitchPlan();
+  const linked = localData['handled:twitch_old-instance'];
+  assert.equal(plan.finished, true); assert.equal(plan.claimedToday, 1);
+  assert.equal(linked.twitchUserId, 'user-1'); assert.equal(linked.campaignId, 'er-1');
+  assert.equal(linked.timeBasedDropId, 'reward-1'); assert.equal(linked.dropInstanceId, 'old-instance');
+  assert.equal(linked.receivedAt, old.receivedAt); assert.equal(linked.handledAt, old.handledAt);
+  assert.equal(linked.claimedAt, undefined); assert.equal(linked.rewardName, old.rewardName);
+  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress = [];
+  pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0].self = null;
+  assert.equal((await twitchPlan()).finished, true);
+});
+
+test('legacy receipts with a different instance or known different account cannot be linked by name', async () => {
+  for (const extra of [{}, { twitchUserId: 'other-account', dropInstanceId: 'official-instance' }]) {
+    const old = { id: 'twitch_old-instance', platform: 'twitch', actionType: 'claimed',
+      rewardName: 'Drops Token', receivedAt: Date.now(), ...extra };
+    localData['handled:twitch_old-instance'] = structuredClone(old);
+    pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress[0].timeBasedDrops[0].self.dropInstanceID = 'official-instance';
+    const plan = await twitchPlan();
+    assert.equal(plan.finished, false); assert.equal(plan.claimedToday, 0);
+    assert.deepEqual(localData['handled:twitch_old-instance'], old);
+  }
+});
+
+test('three claimable tokens count as achieved and pending, without pretending they were claimed', async () => {
+  const drops = [1, 2, 3].map(i => ({ id: 'reward-' + i, requiredMinutesWatched: 60,
+    self: { isClaimed: false, currentMinutesWatched: 60, dropInstanceID: 'instance-' + i } }));
+  pages.HubDropsDetails.user.dropCampaign.timeBasedDrops = drops.map(d => ({ ...d, self: null }));
+  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress[0].timeBasedDrops = drops;
+  const plan = await twitchPlan(); const c = plan.campaigns[0];
+  assert.equal(c.earned, 3); assert.equal(c.total, 3); assert.equal(c.claimed, 0); assert.equal(c.pending, 3);
+  assert.equal(c.completed, false); assert.equal(plan.needsClaim, true); assert.equal(plan.candidates.length, 0);
+  assert.equal(plan.claimedToday, 0);
+});
+
+test('the popup inventory and collection plan use the same confirmed claimed flags', async () => {
+  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress[0].timeBasedDrops[0].self.isClaimed = true;
+  const plan = await twitchPlan();
+  assert.equal(plan.campaigns[0].claimed, 1); assert.equal(plan.campaigns[0].earned, 1);
+  assert.equal(plan.finished, true); assert.equal(plan.candidates.length, 0);
+});
+
+test('different inventory and captured-header accounts cause an error instead of false zero progress', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    if (JSON.parse(options.body).operationName !== 'Inventory') return originalFetch(url, options);
+    return new Response(JSON.stringify({ data: { currentUser: { id: 'other-user',
+      inventory: { dropCampaignsInProgress: [] } } } }));
+  };
+  await assert.rejects(twitchPlan(), /로그인 계정이 다릅니다/);
+  assert.equal(capture, null);
 });

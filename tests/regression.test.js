@@ -275,6 +275,29 @@ test('an unverified Twitch claim account cannot send a mutation or create a rece
   assert.equal(mutations.length, 0); assert.equal(Object.keys(await storage.getHandledDropsLog()).length, 0);
 });
 
+test('Twitch status report shows receipt metadata without exposing credentials or account/instance IDs', async () => {
+  data.collectorState = { twitch: { twitchUserId: 'private-user', claimedToday: 1,
+    campaigns: [{ title: 'Campaign', earned: 3, claimed: 0, pending: 3, total: 3 }] } };
+  data['handled:twitch_private-instance'] = { platform: 'twitch', actionType: 'claimed', rewardName: 'Emoticon englishnoob',
+    twitchUserId: 'private-user', dropInstanceId: 'private-instance', receivedAt: 123, secret: 'DO-NOT-COPY' };
+  data.twitchGqlHeaders = { Authorization: 'OAuth DO-NOT-COPY' };
+  const report = await worker.handleMessage({ type: 'GET_TWITCH_STATUS_REPORT' });
+  assert.equal(report.receipts[0].hasAccountId, true); assert.equal(report.receipts[0].hasCampaignId, false);
+  assert.equal(report.receipts[0].accountMatches, true); assert.equal(report.campaigns[0].pending, 3);
+  assert.equal(/DO-NOT-COPY|private-user|private-instance|Authorization/.test(JSON.stringify(report)), false);
+});
+
+test('Twitch inventory without an account ID retries raw query and cannot report unverified rewards', async () => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return json({ data: { currentUser: { inventory: { dropCampaignsInProgress: [campaign()] } } } });
+  };
+  const result = await fetchTwitchDrops();
+  assert.equal(calls, 2); assert.equal(result.loggedIn, null);
+  assert.match(result.error, /조회 계정을 확인하지/); assert.deepEqual(result.drops, []);
+});
+
 test('failed Twitch claim leaves the card and never writes a completed receipt', async () => {
   campaigns = [campaign()]; await fetchAllDrops(); mode = 'unknown';
   await assert.rejects(worker.handleMessage({ type: 'CLAIM_DROP', id: 'twitch_instance-B' }), /NOT_ELIGIBLE/);
@@ -386,7 +409,7 @@ test('Twitch malformed persisted response retries raw inventory query', async ()
     if (url.endsWith('/gql')) {
       count++;
       const body = JSON.parse(opts.body);
-      return json({ data: { currentUser: { inventory: body.query ? { dropCampaignsInProgress: [campaign()] } : {} } } });
+      return json({ data: { currentUser: { id: 'user-1', inventory: body.query ? { dropCampaignsInProgress: [campaign()] } : {} } } });
     }
     return mockFetch(url, opts);
   };
