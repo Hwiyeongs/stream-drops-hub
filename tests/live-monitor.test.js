@@ -17,9 +17,9 @@ test('only exact category and actual drops flags qualify',()=>{assert.ok(m.norma
 test('disabled does not fetch and clears alarm',async()=>{data.settings.liveMonitorEnabled=false;await m.checkLiveMonitor();await m.ensureLiveAlarm();assert.equal(calls,0);assert.equal(data.alarm,undefined);});
 test('one minute alarm',async()=>{await m.ensureLiveAlarm();assert.equal(data.alarm.periodInMinutes,1);});
 test('notifications deduplicate by campaign, not broadcast',async()=>{await m.checkLiveMonitor();assert.equal(notifications.length,2);await m.checkLiveMonitor();assert.equal(notifications.length,2);chzzk=[live(3)];await m.checkLiveMonitor();assert.equal(notifications.length,2);chzzk=[{...live(4),dropsCampaignNo:456}];await m.checkLiveMonitor();assert.equal(notifications.length,3);});
-test('auto opening one tab per platform with no focus stealing',async()=>{data.settings.liveAutoOpen=true;chzzk=[live(),live(3)];await m.checkLiveMonitor();assert.equal(tabs.length,2);assert.ok(tabs.every(t=>t.active===false));await m.checkLiveMonitor();assert.equal(tabs.length,2);});
-test('enabling auto open later opens known broadcasts',async()=>{await m.checkLiveMonitor();assert.equal(tabs.length,0);data.settings.liveAutoOpen=true;await m.checkLiveMonitor();assert.equal(tabs.length,2);assert.equal(notifications.length,2);});
-test('existing eligible tab is reused',async()=>{tabs=[{id:1,url:'https://chzzk.naver.com/live/'+'a'.repeat(32)}];data.settings.liveAutoOpen=true;await m.checkLiveMonitor();assert.equal(tabs.length,2);});
+test('auto opening only CHZZK with no focus stealing',async()=>{data.settings.liveAutoOpen=true;chzzk=[live(),live(3)];await m.checkLiveMonitor();assert.equal(tabs.length,1);assert.ok(tabs.every(t=>t.active===false));await m.checkLiveMonitor();assert.equal(tabs.length,1);});
+test('enabling auto open later opens known broadcasts',async()=>{await m.checkLiveMonitor();assert.equal(tabs.length,0);data.settings.liveAutoOpen=true;await m.checkLiveMonitor();assert.equal(tabs.length,1);assert.equal(notifications.length,2);});
+test('existing eligible tab is reused',async()=>{tabs=[{id:1,url:'https://chzzk.naver.com/live/'+'a'.repeat(32)}];data.settings.liveAutoOpen=true;await m.checkLiveMonitor();assert.equal(tabs.length,1);});
 test('disable during fetch prevents actions',async()=>{pause=async()=>{data.settings.liveMonitorEnabled=false;};await m.checkLiveMonitor();assert.equal(notifications.length,0);assert.equal(tabs.length,0);});
 test('failed fetch preserves dedupe and reports error',async()=>{await m.checkLiveMonitor();fail=true;await m.checkLiveMonitor();assert.match(data.liveMonitorState.platforms.chzzk.error,/연결 실패/);fail=false;await m.checkLiveMonitor();assert.equal(notifications.length,2);});
 test('notification click validates destinations',async()=>{await m.checkLiveMonitor();await m.openLiveNotification(notifications.find(n=>n.id.startsWith('er-live:chzzk')).id);assert.equal(tabs.length,1);assert.equal(tabs[0].active,true);data.liveMonitorState.notices[notifications.find(n=>n.id.startsWith('er-live:soop')).id].url='https://evil.example';await m.openLiveNotification(notifications.find(n=>n.id.startsWith('er-live:soop')).id);assert.equal(tabs.length,1);});
@@ -27,11 +27,12 @@ test('concurrent checks share one fetch cycle',async()=>{await Promise.all([m.ch
 test('pagination fetches next pages',async()=>{globalThis.fetch=async url=>{const u=new URL(url);const next=u.searchParams.has('liveId');return new Response(JSON.stringify({code:200,content:{data:[live(next?2:1)],page:{next:next?null:{liveId:1,concurrentUserCount:10}}}}));};assert.equal((await m.fetchChzzkEternalLives()).length,2);});
 
 
-test('a SOOP tab at an older broadcast is not mistaken for the current stream', async()=>{
+test('SOOP notifications never automatically replace or open broadcast tabs', async()=>{
  data.settings.liveAutoOpen=true; chzzk=[];
  tabs=[{id:1,url:'https://play.sooplive.com/tester/1'}];
  await m.checkLiveMonitor();
- assert.equal(tabs.length,2); assert.equal(tabs[1].url,'https://play.sooplive.com/tester/2');
+ assert.equal(tabs.length,1); assert.equal(tabs[0].url,'https://play.sooplive.com/tester/1');
+ assert.equal(notifications.length,1);
 });
 test('user navigation in progress prevents owned tab replacement',async()=>{
  data.settings.liveAutoOpen=true;soops=[];
@@ -115,13 +116,16 @@ test('Twitch channel URLs preserve ownership through harmless site parameters bu
    'https://www.twitch.tv/other']) assert.equal(m.sameLiveUrl(channel,url),false,url);
  assert.equal(m.validLiveUrl('https://www.twitch.tv/er_streamer?redirect=other'),false);
 });
-test('SOOP monitor reuses its owned tab after official host redirect',async()=>{
+test('retired SOOP automatic opener leaves old user tabs alone across new broadcasts',async()=>{
  data.settings.liveAutoOpen=true;chzzk=[];
- await m.checkLiveMonitor();
- assert.equal(tabs.length,1);
- tabs[0].url='https://play.sooplive.co.kr/tester/2';
- soops=[{...soop,broad_no:3}];
- await m.checkLiveMonitor();
- assert.equal(tabs.length,1);
- assert.equal(tabs[0].url,'https://play.sooplive.com/tester/3');
+ tabs=[{id:1,url:'https://play.sooplive.co.kr/tester/2'}];
+ data.liveMonitorState={openedTabs:{soop:{id:1,url:'https://play.sooplive.com/tester/2'}}};
+ soops=[{...soop,broad_no:3}];await m.checkLiveMonitor();
+ assert.equal(tabs.length,1);assert.equal(tabs[0].url,'https://play.sooplive.co.kr/tester/2');
+});
+test('SOOP still opens its broadcast when the user explicitly clicks its notification',async()=>{
+ data.settings.liveAutoOpen=true;chzzk=[];await m.checkLiveMonitor();
+ assert.equal(tabs.length,0);
+ await m.openLiveNotification(notifications[0].id);
+ assert.equal(tabs.length,1);assert.equal(tabs[0].url,'https://play.sooplive.com/tester/2');assert.equal(tabs[0].active,true);
 });

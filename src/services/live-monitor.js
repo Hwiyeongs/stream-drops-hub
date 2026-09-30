@@ -106,6 +106,7 @@ export function sameLiveUrl(expected, actual) {
     (first.platform === 'soop' || first.platform === 'twitch' ? first.path === second.path : expected === actual);
 }
 async function openOnce(platform, live, allLives, state) {
+  if (platform !== 'chzzk') return false;
   const patterns = platform === 'chzzk' ? ['https://chzzk.naver.com/live/*'] : ['https://play.sooplive.com/*', 'https://play.sooplive.co.kr/*'];
   const tabs = await chrome.tabs.query({ url: patterns });
   const matches = tab => allLives.some(item => {
@@ -121,7 +122,7 @@ async function openOnce(platform, live, allLives, state) {
   const owned = state.openedTabs?.[platform];
   const tab = owned && tabs.find(t => t.id === owned.id && sameLiveUrl(owned.url, t.url) && (!t.pendingUrl || sameLiveUrl(owned.url, t.pendingUrl)));
   const settings = await getSettings();
-  if (!settings.liveMonitorEnabled || !settings.liveAutoOpen || (platform === 'chzzk' ? settings.autoCollectChzzk : settings.autoCollectSoop)) return;
+  if (!settings.liveMonitorEnabled || !settings.liveAutoOpen || (platform === 'chzzk' && settings.autoCollectChzzk)) return;
   if (!validLiveUrl(live.url)) throw new Error('방송 주소가 올바르지 않습니다.');
   const opened = tab ? await chrome.tabs.update(tab.id, { url: live.url }) : await chrome.tabs.create({ url: live.url, active: false });
   state.openedTabs ||= {};
@@ -191,7 +192,7 @@ async function check() {
       } catch (error) { state.platforms[platform].actionError = '알림 표시 실패: ' + error.message; }
     }
     settings = await getSettings();
-    if (settings.liveMonitorEnabled && settings.liveAutoOpen && !(platform === 'chzzk' ? settings.autoCollectChzzk : settings.autoCollectSoop)) {
+    if (platform === 'chzzk' && settings.liveMonitorEnabled && settings.liveAutoOpen && !settings.autoCollectChzzk) {
       const unopened = lives.filter(live => !state.seen[live.key].opened);
       if (unopened.length) {
         try {

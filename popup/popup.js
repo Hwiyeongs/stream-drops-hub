@@ -4,7 +4,7 @@ import { getCachedDrops, getHandledDropsLog, getSettings, parseExpTimestamp, par
 
 const el = id => document.getElementById(id);
 let settingsBusy = true;
-const settingKeys = { settingNotify: 'enableNotifications', settingAutoClaim: 'autoClaim', settingInterval: 'pollingIntervalMinutes', settingLiveMonitor: 'liveMonitorEnabled', settingLiveAutoOpen: 'liveAutoOpen', settingCollectChzzk: 'autoCollectChzzk', settingCollectSoop: 'autoCollectSoop', settingCollectTwitch: 'autoCollectTwitch', settingCollectCampaign: 'chzzkCollectCampaign' };
+const settingKeys = { settingNotify: 'enableNotifications', settingAutoClaim: 'autoClaim', settingInterval: 'pollingIntervalMinutes', settingLiveMonitor: 'liveMonitorEnabled', settingLiveAutoOpen: 'liveAutoOpen', settingCollectChzzk: 'autoCollectChzzk', settingCollectTwitch: 'autoCollectTwitch', settingCollectCampaign: 'chzzkCollectCampaign' };
 const settingIds = Object.keys(settingKeys);
 async function renderLiveStatus() {
   const [{ liveMonitorState: state }, settings] = await Promise.all([chrome.storage.local.get('liveMonitorState'), getSettings()]);
@@ -20,53 +20,16 @@ async function renderCollector() {
   const options = [new Option('모든 캠페인 순차 수집', 'auto'), ...list.map(c => new Option(c.title, c.id))];
   if (settings.chzzkCollectCampaign !== 'auto' && !list.some(c => c.id === settings.chzzkCollectCampaign)) options.push(new Option('선택한 캠페인 #' + settings.chzzkCollectCampaign + ' (현재 목록 없음)', settings.chzzkCollectCampaign));
   select.replaceChildren(...options); select.value = settings.chzzkCollectCampaign;
-  el('collectorStatus').textContent = ['chzzk', 'soop', 'twitch'].map(p => {
-    const on = p === 'chzzk' ? settings.autoCollectChzzk : p === 'soop' ? settings.autoCollectSoop : settings.autoCollectTwitch;
+  el('collectorStatus').textContent = ['chzzk', 'twitch'].map(p => {
+    const on = p === 'chzzk' ? settings.autoCollectChzzk : settings.autoCollectTwitch;
     const state = collectorState[p];
     const fresh = Number.isFinite(state?.campaignsCheckedAt) && Date.now() - state.campaignsCheckedAt < 3 * 60000;
     const campaigns = on && fresh && !state?.error ? (state?.campaigns || []).filter(c => c.active && !c.completed) : [];
     const status = !on ? '꺼짐' : state?.error ? state.status : !fresh ?
       (state?.userStopped ? '자동 시청 일시 중지됨 · 보관함 재확인 대기' : '보관함 재확인 대기') : state?.status || '확인 중…';
-    return (p === 'chzzk' ? '치지직: ' : p === 'soop' ? 'SOOP: ' : '트위치: ') + status +
-      campaigns.map(c => `\n· ${c.title}: ${c.verificationPending ? '수령 여부 확인 중' : `${c.earned}/${c.total}개 달성${c.manualWatch ? ' · 직접 미수령 확인' : ''}`}`).join('');
+    return (p === 'chzzk' ? '치지직: ' : '트위치: ') + status +
+      campaigns.map(c => `\n· ${c.title}: ${c.earned}/${c.total}개 달성`).join('');
   }).join('\n');
-  const twitch = collectorState.twitch;
-  const fresh = Number.isFinite(twitch?.campaignsCheckedAt) && Date.now() - twitch.campaignsCheckedAt < 3 * 60000;
-  const controls = el('twitchCampaignControls');
-  controls.replaceChildren();
-  if (settings.autoCollectTwitch && fresh && !twitch?.error) {
-    for (const campaign of twitch?.campaigns || []) {
-      if (!campaign.active || (campaign.completed && !campaign.manualCompleted)) continue;
-      const row = document.createElement('div');
-      row.className = 'twitch-campaign-control';
-      const label = document.createElement('span');
-      label.textContent = campaign.title;
-      const buttons = document.createElement('div');
-      buttons.className = 'twitch-campaign-buttons';
-      const addButton = (text, mode) => {
-        const button = document.createElement('button');
-        button.className = 'collector-refresh';
-        button.type = 'button';
-        button.textContent = text;
-        button.dataset.campaignId = campaign.id;
-        button.dataset.mode = mode;
-        buttons.append(button);
-      };
-      if (campaign.manualCompleted || campaign.manualWatch) addButton('자동 판정으로', 'auto');
-      else {
-        addButton('이미 수령함', 'completed');
-        if (campaign.verificationPending) addButton('미수령 · 시청', 'watch');
-      }
-      row.append(label, buttons);
-      controls.append(row);
-    }
-    if (controls.childElementCount) {
-      const note = document.createElement('p');
-      note.className = 'setting-desc';
-      note.textContent = '공식 캠페인과 인벤토리에서 확인한 상태를 선택하세요. 수동 판정은 이 브라우저에만 저장되며 취소할 수 있습니다.';
-      controls.prepend(note);
-    }
-  }
 }
 function enableSettingControls() {
   settingIds.map(el).forEach(c => { c.disabled = settingsBusy; });
@@ -190,7 +153,7 @@ function card(drop, history) {
     node.appendChild(image);
   } else node.appendChild(fallback());
   const details = create('div', 'drop-details'), title = create('div', 'drop-title-row'), sub = create('div', 'drop-sub-row');
-  const platform = ['chzzk', 'soop', 'twitch'].includes(drop.platform) ? drop.platform : 'unknown';
+  const platform = ['chzzk', 'twitch'].includes(drop.platform) ? drop.platform : 'unknown';
   title.appendChild(create('span', `platform-pill pill-${platform}`, drop.platformName || platform));
   const name = create('span', 'drop-name', drop.rewardName); name.title = drop.rewardName; title.appendChild(name);
   sub.appendChild(create('span', 'drop-game', drop.gameTitle || drop.campaignName));
@@ -253,7 +216,6 @@ async function refresh() {
 async function loadSettings() {
   const settings = await getSettings();
   el('settingCollectChzzk').checked = settings.autoCollectChzzk;
-  el('settingCollectSoop').checked = settings.autoCollectSoop;
   el('settingCollectTwitch').checked = settings.autoCollectTwitch;
   await renderCollector();
   el('settingLiveMonitor').checked = settings.liveMonitorEnabled;
@@ -276,17 +238,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('refreshCampaigns').disabled = true;
     try { await request('GET_COLLECTOR_CATALOG'); await renderCollector(); } catch (error) { toast(error.message, 'error'); }
     finally { el('refreshCampaigns').disabled = false; }
-  });
-  el('twitchCampaignControls').addEventListener('click', async event => {
-    const button = event.target.closest('button[data-campaign-id]');
-    if (!button || button.disabled) return;
-    button.disabled = true;
-    try {
-      await request('SET_TWITCH_CAMPAIGN_OVERRIDE', { id: button.dataset.campaignId,
-        mode: button.dataset.mode });
-      await renderCollector();
-      toast('트위치 캠페인 표시를 갱신했습니다.', 'success');
-    } catch (error) { toast(error.message, 'error'); button.disabled = false; }
   });
   el('refreshBtn').addEventListener('click', refresh);
   el('claimAllBtn').addEventListener('click', async () => {

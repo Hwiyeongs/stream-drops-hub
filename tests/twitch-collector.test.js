@@ -49,7 +49,7 @@ test('Twitch plan chooses an Eternal Return Drops-enabled live and uses server p
   assert.equal(plan.campaigns[0].minutes, 15);
   assert.equal(plan.candidates[0].lives[0].url, 'https://www.twitch.tv/er_streamer');
   assert.equal(requested.filter(r => r.operationName === 'HubDropsDetails').length, 1);
-  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 1);
+  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 0);
   assert.equal(requested.find(r => r.operationName === 'HubDropsInventory').query.includes('gameEventDrops'), false);
   assert.equal(tabActions.length, 0);
 });
@@ -120,47 +120,22 @@ test('a recent aggregate benefit award does not prove the campaign tier was clai
   const plan = await twitchPlan();
   assert.equal(plan.campaigns[0].earned, 0);
   assert.equal(plan.campaigns[0].completed, false);
-  assert.equal(plan.campaigns[0].verificationPending, true);
-  assert.equal(plan.candidates.length, 0);
-  assert.equal(plan.finished, false);
-  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 1);
-});
-
-test('a local completed choice is scoped to viewer and campaign end date', async () => {
-  localData.twitchCampaignOverrides = { 'viewer:er-1': { mode: 'completed', endAt: Date.parse(campaign().endAt) } };
-  const plan = await twitchPlan();
-  assert.equal(plan.campaigns[0].manualCompleted, true);
-  assert.equal(plan.campaigns[0].completed, true);
-  assert.equal(plan.candidates.length, 0);
-  localData.twitchCampaignOverrides['viewer:er-1'].endAt += 1000;
-  const changed = await twitchPlan();
-  assert.equal(changed.campaigns[0].completed, false);
-  assert.equal(changed.candidates.length, 1);
-});
-
-test('a local watch choice allows a confirmed unclaimed campaign after award lookup fails', async () => {
-  const tier = pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0];
-  tier.self.currentMinutesWatched = 0;
-  tier.benefitEdges = [{ benefit: { id: 'benefit-1' } }];
-  awardedRejected = true;
-  localData.twitchCampaignOverrides = { 'viewer:er-1': { mode: 'watch', endAt: Date.parse(campaign().endAt) } };
-  const plan = await twitchPlan();
-  assert.equal(plan.campaigns[0].manualWatch, true);
-  assert.equal(plan.campaigns[0].verificationPending, false);
+  assert.equal(plan.campaigns[0].verificationPending, undefined);
   assert.equal(plan.candidates.length, 1);
+  assert.equal(plan.finished, false);
+  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 0);
 });
 
-test('a local watch choice cannot open a stream without a tier requiring watch time', async () => {
+test('a campaign without a tier requiring watch time cannot open a stream', async () => {
   const tier = pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0];
   tier.requiredMinutesWatched = 0;
   tier.self = { isClaimed: false, currentMinutesWatched: 0 };
-  localData.twitchCampaignOverrides = { 'viewer:er-1': { mode: 'watch', endAt: Date.parse(campaign().endAt) } };
   const plan = await twitchPlan();
   assert.equal(plan.campaigns[0].canWatch, false);
   assert.equal(plan.candidates.length, 0);
 });
 
-test('rejected optional award query leaves ordinary Twitch campaign progress usable', async () => {
+test('unavailable aggregate award history cannot block a new zero-progress campaign', async () => {
   pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress = [];
   const tier = pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0];
   tier.self = null;
@@ -169,9 +144,9 @@ test('rejected optional award query leaves ordinary Twitch campaign progress usa
   const plan = await twitchPlan();
   assert.equal(plan.campaigns[0].earned, 0);
   assert.equal(plan.campaigns[0].completed, false);
-  assert.equal(plan.candidates.length, 0);
-  assert.equal(plan.needsVerification, true);
-  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 2);
+  assert.equal(plan.candidates.length, 1);
+  assert.equal(plan.needsVerification, undefined);
+  assert.equal(requested.filter(r => r.operationName === 'Inventory').length, 0);
 });
 
 test('a new unclaimed campaign can still start when the award inventory is available and empty', async () => {
@@ -180,7 +155,7 @@ test('a new unclaimed campaign can still start when the award inventory is avail
   tier.self = { isClaimed: false, currentMinutesWatched: 0 };
   tier.benefitEdges = [{ benefit: { id: 'new-benefit' } }];
   const plan = await twitchPlan();
-  assert.equal(plan.needsVerification, false);
+  assert.equal(plan.needsVerification, undefined);
   assert.equal(plan.candidates.length, 1);
 });
 
@@ -193,18 +168,18 @@ test('one aggregate award cannot prove multiple tiers sharing the same benefit',
   pages.Inventory.currentUser.inventory.gameEventDrops = [{ id: 'shared-token', lastAwardedAt: '2026-09-30T00:00:00Z' }];
   const plan = await twitchPlan();
   assert.equal(plan.campaigns[0].earned, 0);
-  assert.equal(plan.campaigns[0].verificationPending, true);
-  assert.equal(plan.candidates.length, 0);
+  assert.equal(plan.campaigns[0].verificationPending, undefined);
+  assert.equal(plan.candidates.length, 1);
 });
 
-test('repeated campaign benefits stay uncertain even if aggregate award lookup is empty', async () => {
+test('repeated tokens in a fresh campaign start automatically', async () => {
   const tier = pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0];
   tier.self = { isClaimed: false, currentMinutesWatched: 0 };
   tier.benefitEdges = [{ benefit: { id: 'shared-token' } }];
   pages.HubDropsDetails.user.dropCampaign.timeBasedDrops.push({ ...tier, id: 'reward-2' });
   const plan = await twitchPlan();
-  assert.equal(plan.needsVerification, true);
-  assert.equal(plan.candidates.length, 0);
+  assert.equal(plan.needsVerification, undefined);
+  assert.equal(plan.candidates.length, 1);
 });
 
 test('awarded benefit from a different date cannot complete a current Twitch tier', async () => {
@@ -229,4 +204,12 @@ test('Twitch plan rejects malformed broadcast addresses and unrelated categories
   assert.equal(isEternalReturnGame({ displayName: 'Eternal Return' }), true);
   assert.equal(isEternalReturnGame({ displayName: '이터널 리턴' }), true);
   assert.equal(isEternalReturnGame({ displayName: 'Other Game' }), false);
+});
+
+test('claimed flags from either campaign or inventory stop viewing without a manual choice',async()=>{
+ pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0].self.isClaimed=true;
+ assert.equal((await twitchPlan()).finished,true);
+ pages.HubDropsDetails.user.dropCampaign.timeBasedDrops[0].self.isClaimed=false;
+ pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress[0].timeBasedDrops[0].self.isClaimed=true;
+ const plan=await twitchPlan();assert.equal(plan.finished,true);assert.equal(plan.candidates.length,0);
 });

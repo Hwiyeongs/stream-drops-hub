@@ -799,7 +799,3 @@ body {
   font-size: 12px;
 }
 .collector-refresh:disabled { opacity: .5; cursor: wait; }
-.twitch-campaign-control { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
-.twitch-campaign-control span { min-width: 0; overflow-wrap: anywhere; }
-.twitch-campaign-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.twitch-campaign-control button { flex: 0 0 auto; }

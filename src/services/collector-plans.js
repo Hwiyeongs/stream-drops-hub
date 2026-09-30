@@ -1,6 +1,6 @@
 import { fetchWithTimeout } from './fetch-helper.js';
 import { parseTimestamp } from './storage.js';
-import { CHZZK_CATEGORY, fetchChzzkEternalLives, fetchSoopEternalLives } from './live-monitor.js';
+import { CHZZK_CATEGORY, fetchChzzkEternalLives } from './live-monitor.js';
 
 const headers = { Accept: 'application/json', 'Front-Client-Product-Type': 'GAME', 'Front-Client-Platform-Type': 'PC' };
 async function read(url, authenticated = false) {
@@ -45,32 +45,4 @@ export async function chzzkPlan(selected = 'auto') {
   }));
   const pending = campaigns.filter(c => c.active && !c.completed && c.watchable).sort((a,b) => a.endAt - b.endAt || a.id.localeCompare(b.id));
   return { catalog, campaigns, candidates: pending, finished: campaigns.length > 0 && campaigns.every(c => c.completed || !c.active || !c.watchable) };
-}
-const isER = value => typeof value === 'string' && ['이터널리턴', 'eternalreturn'].includes(value.replace(/\s/g, '').toLowerCase());
-const percentValue = value => {
-  const text = String(value ?? '').trim();
-  const match = text.match(/^(\d+(?:[.,]\d+)?)\s*%?$/);
-  return match ? Number(match[1].replace(',', '.')) : 0;
-};
-export function soopMissions(rows, lives, now = Date.now()) {
-  return rows.filter(r => isER(r.cateName)).map(r => {
-    if (!Array.isArray(r.itemList)) throw new Error('SOOP 미션 목록 형식이 변경되었습니다.');
-    const start = parseTimestamp(r.startDate), end = parseTimestamp(r.endDate);
-    const items = r.itemList;
-    const completed = items.length > 0 && items.every(i => percentValue(i.percent) >= 100);
-    const allowed = r.dropsType === 'C' ? lives : lives.filter(l => Array.isArray(r.broadIdList) && r.broadIdList.some(b => b.userId === l.channelId && String(b.broadNo) === l.liveId));
-    return { id: String(r.dropsIdx ?? r.title) + ':' + r.startDate, title: String(r.title || '이터널리턴 SOOP 드롭스'),
-      active: start !== null && end !== null && start <= now && now < end, completed, endAt: end,
-      total: items.length, earned: items.filter(i => percentValue(i.percent) >= 100).length,
-      minutes: items.length ? Math.max(...items.map(i => Number(i.viewTime) || 0)) : null, lives: allowed };
-  });
-}
-export async function soopPlan() {
-  const [json, lives] = await Promise.all([read('https://drops.sooplive.com/api/get_drops_mission_list.php', true), fetchSoopEternalLives()]);
-  if (json.result !== 1 || !Array.isArray(json.data)) throw new Error('SOOP 로그인 및 드롭스 참여 설정을 확인해 주세요.');
-  const campaigns = soopMissions(json.data, lives);
-  return { campaigns, candidates: campaigns.filter(c => c.active && !c.completed).sort((a,b) => a.endAt - b.endAt),
-    // An empty list may mean the user has not joined yet. Never call it completed.
-    finished: campaigns.some(c => c.active) && campaigns.filter(c => c.active).every(c => c.completed),
-    discoveryLives: campaigns.some(c => c.active) ? [] : lives };
 }

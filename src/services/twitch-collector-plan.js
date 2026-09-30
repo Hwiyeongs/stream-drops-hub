@@ -4,12 +4,6 @@ import { buildCapturedTwitchRequestHeaders, clearCapturedTwitchGqlHeaders, getCa
 const GQL_URL = 'https://gql.twitch.tv/gql';
 const INVENTORY_URL = 'https://www.twitch.tv/drops/inventory';
 const CHANNEL = /^[a-z0-9_]{1,25}$/i;
-const INVENTORY_HASHES = [
-  'd86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b',
-  '8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404',
-];
-const OVERRIDE_KEY = 'twitchCampaignOverrides';
-
 // These viewer-side fields are used by Twitch's own Drops pages. They may change;
 // malformed or failed responses must never be treated as an empty campaign list.
 const VIEWER = 'query HubDropsViewer { currentUser { login } }';
@@ -21,7 +15,6 @@ const DETAILS = `query HubDropsDetails($login: String!, $id: ID!) {
     id name status startAt endAt self { isAccountConnected } game { id slug displayName }
     allow { isEnabled channels { id name displayName } }
     timeBasedDrops { id name startAt endAt requiredMinutesWatched
-      benefitEdges { benefit { id } }
       self { isClaimed currentMinutesWatched dropInstanceID } }
   } }
 }`;
@@ -45,46 +38,27 @@ function validLogin(value) { return typeof value === 'string' && CHANNEL.test(va
 function watched(drop) { return Number(drop?.self?.currentMinutesWatched) || 0; }
 function required(drop) { return Number(drop?.requiredMinutesWatched) || 0; }
 
-export function summarizeTwitchCampaign(detail, inventory, now = Date.now(), awardedBenefits = null) {
+export function summarizeTwitchCampaign(detail, inventory, now = Date.now()) {
   if (!detail?.id || !Array.isArray(detail.timeBasedDrops)) throw new Error('트위치 캠페인 보상 형식이 변경되었습니다.');
   const fresh = new Map((inventory?.timeBasedDrops || []).filter(d => d?.id).map(d => [d.id, d.self]));
-  const awarded = new Map((awardedBenefits || []).filter(b => b?.id).map(b => [String(b.id), Date.parse(b.lastAwardedAt)]));
-  const benefitCounts = new Map();
-  for (const drop of detail.timeBasedDrops) for (const edge of drop.benefitEdges || []) {
-    const id = edge?.benefit?.id;
-    if (id) benefitCounts.set(String(id), (benefitCounts.get(String(id)) || 0) + 1);
-  }
   const drops = detail.timeBasedDrops.map(drop => {
     const inventorySelf = fresh.get(drop.id);
-    const start = Date.parse(drop.startAt || detail.startAt), end = Date.parse(drop.endAt || detail.endAt);
-    const benefits = drop.benefitEdges?.map(edge => String(edge?.benefit?.id || '')).filter(Boolean) || [];
-    // gameEventDrops is grouped by benefit, with only its last award time. A
-    // Drops Token award can belong to another campaign, so it is a reason to
-    // pause an uncertain zero-progress tier, never proof that this tier was claimed.
-    const possiblyAwarded = benefits.some(id => {
-      const at = awarded.get(id);
-      return Number.isFinite(at) && Number.isFinite(start) && Number.isFinite(end) && start <= at && at < end;
-    });
     const currentMinutesWatched = Math.max(watched(drop), watched({ self: inventorySelf }));
     const isClaimed = drop.self?.isClaimed === true || inventorySelf?.isClaimed === true;
     return { ...drop, self: { ...drop.self, ...inventorySelf,
-      isClaimed, currentMinutesWatched },
-    verificationPending: !isClaimed && currentMinutesWatched === 0 &&
-      (!Array.isArray(awardedBenefits) || benefits.length === 0 ||
-        benefits.some(id => benefitCounts.get(id) > 1) || possiblyAwarded) };
+      isClaimed, currentMinutesWatched } };
   });
   const startAt = Date.parse(detail.startAt), endAt = Date.parse(detail.endAt);
   const active = detail.status === 'ACTIVE' && Number.isFinite(startAt) && Number.isFinite(endAt) && startAt <= now && now < endAt;
   const earned = drops.filter(d => d.self?.isClaimed === true).length;
-  const verificationPending = drops.some(d => d.verificationPending);
   const claimable = drops.some(d => !d.self?.isClaimed && required(d) > 0 && watched(d) >= required(d));
   const needsLink = detail.self?.isAccountConnected === false;
   // A completed tier often needs claiming before Twitch advances the next one.
   const canWatch = drops.some(d => !d.self?.isClaimed && required(d) > watched(d));
-  const watchable = !claimable && !verificationPending && canWatch;
+  const watchable = !claimable && canWatch;
   const minutes = drops.length ? drops.reduce((sum, drop) => sum + watched(drop), 0) : null;
   return { id: String(detail.id), title: String(detail.name || '트위치 이터널리턴 드롭스'), active,
-    completed: drops.length > 0 && earned === drops.length, canWatch, watchable, claimable, needsLink, minutes, verificationPending,
+    completed: drops.length > 0 && earned === drops.length, canWatch, watchable, claimable, needsLink, minutes,
     earned, total: drops.length, endAt, game: detail.game,
     restricted: detail.allow?.isEnabled === true || (detail.allow?.isEnabled !== false && (detail.allow?.channels?.length || 0) > 0),
     allowed: detail.allow?.channels || [], lives: [] };
@@ -135,20 +109,6 @@ async function gqlRequest(capture, body) {
 function gql(capture, operationName, query, variables = {}) {
   return gqlRequest(capture, { operationName, query, variables });
 }
-async function awardedInventory(capture) {
-  for (const hash of INVENTORY_HASHES) {
-    try {
-      const data = await gqlRequest(capture, { operationName: 'Inventory', variables: {},
-        extensions: { persistedQuery: { version: 1, sha256Hash: hash } } });
-      const awards = data.currentUser?.inventory?.gameEventDrops;
-      if (Array.isArray(awards)) return awards;
-    } catch (error) {
-      console.warn('[Drops Hub] Twitch award inventory unavailable:', error.message);
-    }
-  }
-  return null;
-}
-
 function safeLives(rows, campaign) {
   const found = new Map();
   for (const row of rows) {
@@ -181,19 +141,7 @@ export async function twitchPlan(now = Date.now(), currentChannel = null) {
     if (String(detail?.id) !== String(c.id) || !isEternalReturnGame(detail?.game)) throw new Error('트위치 캠페인 상세 정보가 일치하지 않습니다.');
     return detail;
   }));
-  const needsAwardLookup = details.some(detail => detail.timeBasedDrops?.some(drop => drop.self?.isClaimed !== true));
-  const awardedBenefits = needsAwardLookup ? await awardedInventory(capture) : [];
-  const campaigns = details.map(detail => summarizeTwitchCampaign(detail, progress.get(String(detail.id)), now, awardedBenefits));
-  const stored = (await chrome.storage.local.get(OVERRIDE_KEY))[OVERRIDE_KEY];
-  const overrides = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
-  for (const campaign of campaigns) {
-    const override = overrides[`${login.toLowerCase()}:${campaign.id}`];
-    if (override?.endAt !== campaign.endAt) continue;
-    if (override.mode === 'completed') Object.assign(campaign, { manualCompleted: true, completed: true,
-      earned: campaign.total, watchable: false, claimable: false, verificationPending: false });
-    if (override.mode === 'watch') Object.assign(campaign, { manualWatch: true,
-      watchable: campaign.canWatch && !campaign.completed && !campaign.claimable, verificationPending: false });
-  }
+  const campaigns = details.map(detail => summarizeTwitchCampaign(detail, progress.get(String(detail.id)), now));
   const liveQueries = new Map();
   for (const campaign of campaigns.filter(c => c.active && c.watchable)) {
     const allowed = campaign.allowed.map(c => c?.name?.toLowerCase()).filter(validLogin);
@@ -226,6 +174,5 @@ export async function twitchPlan(now = Date.now(), currentChannel = null) {
   }
   const candidates = campaigns.filter(c => c.active && c.watchable).sort((a, b) => a.endAt - b.endAt || a.id.localeCompare(b.id));
   return { login: login.toLowerCase(), campaigns, candidates, needsClaim: campaigns.some(c => c.claimable), needsLink: campaigns.some(c => c.needsLink),
-    needsVerification: campaigns.some(c => c.verificationPending),
     finished: campaigns.length > 0 && campaigns.every(c => c.completed) };
 }

@@ -1,16 +1,19 @@
 import { dropsDay } from './drops-day.js';
 import { getSettings } from './storage.js';
-import { chzzkPlan, soopPlan } from './collector-plans.js';
+import { chzzkPlan } from './collector-plans.js';
 import { twitchPlan } from './twitch-collector-plan.js';
 import { validLiveUrl, sameLiveUrl } from './live-monitor.js';
 
 export const COLLECT_ALARM = 'collectEternalReturnDrops';
-const PLATFORMS = ['chzzk', 'soop', 'twitch'];
-const flag = p => ({ chzzk: 'autoCollectChzzk', soop: 'autoCollectSoop', twitch: 'autoCollectTwitch' })[p];
+const PLATFORMS = ['chzzk', 'twitch'];
+const flag = p => ({ chzzk: 'autoCollectChzzk', twitch: 'autoCollectTwitch' })[p];
 let pending;
 export async function ensureCollectorAlarm() {
+  // Retire only the legacy collector's owned SOOP tab, preserving user tabs.
+  const { collectorState } = await chrome.storage.local.get('collectorState');
+  if (collectorState?.soop) await checkCollector(true);
   const s = await getSettings();
-  if (!s.autoCollectChzzk && !s.autoCollectSoop && !s.autoCollectTwitch) { await chrome.alarms.clear(COLLECT_ALARM); return; }
+  if (!s.autoCollectChzzk && !s.autoCollectTwitch) { await chrome.alarms.clear(COLLECT_ALARM); return; }
   if ((await chrome.alarms.get(COLLECT_ALARM))?.periodInMinutes !== 1) await chrome.alarms.create(COLLECT_ALARM, { periodInMinutes: 1 });
 }
 // Executed only in an extension-created tab still showing the owned broadcast.
@@ -27,21 +30,27 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
           first.pathname.replace(/\/$/, '').toLowerCase() === second.pathname.replace(/\/$/, '').toLowerCase();
       } catch { return false; }
     }
-    if (platform !== 'soop') return false;
-    try {
-      const first = new URL(expectedUrl), second = new URL(current);
-      const hosts = ['play.sooplive.com', 'play.sooplive.co.kr'];
-      const safe = (raw, parsed) => /^https:\/\/([^/?#]+)\//i.exec(raw)?.[1]?.toLowerCase() === parsed.hostname &&
-        parsed.protocol === 'https:' && hosts.includes(parsed.hostname) && !parsed.username &&
-        !parsed.password && !parsed.port && !parsed.search && !parsed.hash &&
-        /^\/[a-z0-9_-]{1,64}\/\d+$/i.test(parsed.pathname);
-      return safe(expectedUrl, first) && safe(current, second) && first.pathname === second.pathname;
-    } catch { return false; }
+    return false;
   };
   if (!sameLocation(location.href)) return { state: 'navigation' };
+  const visibility = () => ({ hidden: document.visibilityState === 'hidden', hasFocus: document.hasFocus?.() ?? null });
+  // PZP can place its video and controls inside an open shadow root.
+  const roots = [document];
+  const refreshRoots = () => {
+    for (let i = 0; i < roots.length && i < 32; i++) {
+      let visited = 0;
+      for (const node of roots[i].querySelectorAll('*')) {
+        if (++visited > 2500) break;
+        if (roots.length < 32 && node.shadowRoot && !roots.includes(node.shadowRoot)) roots.push(node.shadowRoot);
+      }
+    }
+  };
+  refreshRoots();
+  const query = selector => roots.map(root => root.querySelector?.(selector)).find(Boolean);
   const findVideo = () => {
+    refreshRoots();
     // CHZZK can render an ad video beside the actual PZP live player.
-    const videos = [...document.querySelectorAll('video')].filter(v => platform !== 'chzzk' ||
+    const videos = [...new Set(roots.flatMap(root => [...root.querySelectorAll('video')]))].filter(v => platform !== 'chzzk' ||
       !v.closest?.("[data-role='adVideoContainerEl'],[data-role='imaAdContainerEl'],[data-role='gvAdContainerEl'],#midAdVideoContainer,#midAdPlayerWrapper,video[title='Advertisement' i]"));
     const visible = videos.filter(v => {
       const r = v.getBoundingClientRect(); return r.width > 120 && r.height > 80;
@@ -49,19 +58,19 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
     const primary = platform === 'chzzk' ? videos.find(v => v.matches?.("video[data-role='videoEl']")) :
       platform === 'twitch' ? videos.find(v => v.closest?.('[data-a-target="video-player"],.video-player__container,.video-player')) : null;
     // A single player can report zero layout size while its window is occluded.
-    return (platform === 'soop' ? document.querySelector('video#livePlayer') : primary) ||
+    return primary ||
       visible[0] || (videos.length === 1 ? videos[0] : null);
   };
   let video = findVideo();
   const restorePlayerSound = () => {
-    if (!video || platform === 'soop') return;
+    if (!video) return;
     video.defaultMuted = false;
     video.muted = false;
     if (video.volume === 0) video.volume = 1;
   };
   if (start && platform === 'chzzk' && (!video || video.paused || video.ended)) {
     // The site's own control can initialize the live player before a video exists.
-    const playButton = document.querySelector?.('.pzp .pzp-brand-playback-button,.pzp .pzp-playback-switch,[aria-label="video player"] .pzp-brand-playback-button,[aria-label="video player"] .pzp-playback-switch');
+    const playButton = query('.pzp-brand-playback-button,.pzp-playback-switch');
     if (playButton && !playButton.disabled) {
       restorePlayerSound();
       playButton.click();
@@ -70,7 +79,7 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
     }
   }
   if (start && platform === 'twitch' && (!video || video.paused || video.ended)) {
-    const playButton = document.querySelector?.('[data-a-target="player-play-pause-button"]');
+    const playButton = query('[data-a-target="player-play-pause-button"]');
     if (playButton && !playButton.disabled) {
       restorePlayerSound();
       playButton.click();
@@ -78,28 +87,15 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
       video = findVideo();
     }
   }
-  if (!video) return { state: 'missing', reason: 'PlayerVideoMissing' };
+  if (!video) return { state: 'missing', reason: 'PlayerVideoMissing', ...visibility() };
   const result = (state, reason = null, deltaSeconds = 0) => ({
-    state, reason, readyState: video.readyState, networkState: video.networkState,
+    state, reason, ...visibility(), readyState: video.readyState, networkState: video.networkState,
     paused: video.paused, ended: video.ended, muted: video.muted,
     deltaSeconds: Math.round(deltaSeconds * 100) / 100,
   });
   // Tab mute is separate from the site's player mute state. A player muted by
   // the site can fail to earn watch progress even while the video clock moves.
-  if (platform === 'soop') {
-    if (start) { video.defaultMuted = true; video.muted = true; }
-  } else restorePlayerSound();
-  if (start && platform === 'soop') {
-    // SOOP's initial data:video is a short placeholder. Its own play control
-    // starts the live stream; playing the placeholder alone never joins it.
-    const playButton = document.querySelector('button#play.play');
-    if (playButton && (video.paused || video.ended || video.currentSrc?.startsWith('data:video/'))) {
-      playButton.click();
-      await new Promise(resolve => setTimeout(resolve, 500));
-      video.muted = true;
-    }
-    if (video.currentSrc?.startsWith('data:video/')) return result('loading', 'SoopPlayerStarting');
-  }
+  restorePlayerSound();
   if (video.error) return result('error', `MediaError${Number(video.error.code) || 0}`);
   if (video.paused && !start) return result('paused');
   let mutedFallback = false;
@@ -116,7 +112,7 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
     try {
       await playWithinTimeout();
     } catch (error) {
-      if (error?.name === 'NotAllowedError' && platform !== 'soop') {
+      if (error?.name === 'NotAllowedError') {
         // Chrome permits muted autoplay even when audible autoplay is blocked.
         // Use that only to start playback, then restore the player's sound.
         video.defaultMuted = true;
@@ -137,9 +133,8 @@ export async function controlVideo(expectedUrl, start = false, platform = 'chzzk
   await new Promise(resolve => setTimeout(resolve, 2500));
   if (!sameLocation(location.href)) return result('navigation');
   const delta = Math.max(0, video.currentTime - before);
-  if (platform === 'soop') { if (start) video.muted = true; }
-  else restorePlayerSound();
-  if (platform !== 'soop' && (video.muted || video.volume === 0)) return result('blocked', 'PlayerMuted', delta);
+  restorePlayerSound();
+  if (video.muted || video.volume === 0) return result('blocked', 'PlayerMuted', delta);
   return result(!video.paused && !video.ended && delta > 0.1 ? 'playing' : 'stalled', null, delta);
 }
 async function probe(session, start = false, platform = 'chzzk') {
@@ -148,13 +143,53 @@ async function probe(session, start = false, platform = 'chzzk') {
     return results?.[0]?.result || { state: 'missing' };
   } catch { return { state: 'injection_error', reason: 'ScriptingFailure' }; }
 }
+// An alarm has no user activation. Chrome may pause on player unmute even
+// with a muted browser tab; use a short gesture-scoped playback evaluation.
+export async function startWithBrowserGesture(session) {
+  if (!/^https:\/\/chzzk\.naver\.com\/live\/[a-f0-9]{32}$/i.test(session?.url || '')) return { state: 'navigation' };
+  const { collectorState } = await chrome.storage.local.get('collectorState');
+  const owner = collectorState?.chzzk;
+  if (owner?.tabId !== session.tabId || owner?.url !== session.url || owner.userStopped) return { state: 'navigation' };
+  if (!chrome.debugger) return { state: 'blocked', reason: 'BrowserGestureUnavailable' };
+  const target = { tabId: session.tabId };
+  let attached = false;
+  try {
+    const tab = await ownedTab(session);
+    if (!tab) return { state: 'navigation' };
+    if (!(await getSettings()).autoCollectChzzk) return { state: 'cancelled' };
+    if (!tab.active) return { state: 'interrupted' };
+    if (tab.status === 'loading' || !sameLiveUrl(session.url, tab.url)) return { state: 'loading' };
+    await chrome.tabs.update(tab.id, { muted: true, autoDiscardable: false });
+    await chrome.debugger.attach(target, '1.3');
+    attached = true;
+    // Revalidate after attaching; never run playback against a user navigation.
+    const current = await ownedTab(session);
+    if (!current) return { state: 'navigation' };
+    if (!current.active) return { state: 'interrupted' };
+    if (current.status === 'loading' || !sameLiveUrl(session.url, current.url)) return { state: 'loading' };
+    if (!(await getSettings()).autoCollectChzzk) return { state: 'cancelled' };
+    const response = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
+      expression: `(${controlVideo.toString()})(${JSON.stringify(session.url)}, true, 'chzzk')`,
+      userGesture: true, awaitPromise: true, returnByValue: true,
+    });
+    return response?.exceptionDetails ? { state: 'blocked', reason: 'BrowserGestureFailed' } :
+      response?.result?.value || { state: 'blocked', reason: 'BrowserGestureFailed' };
+  } catch {
+    return { state: 'blocked', reason: 'BrowserGestureUnavailable' };
+  } finally {
+    if (attached) {
+      try { await chrome.debugger.detach(target); } catch { /* Target may have closed. */ }
+    }
+  }
+}
 // Activate only for startup/recovery. Never take focus back after a user switches tabs.
-async function startPlayback(session, platform, previousTab, fromBlank = false) {
+async function startPlayback(session, platform, previousTab, fromBlank = false, alreadyActive = false) {
   session.lastStartAt = Date.now();
   let playback = { state: 'missing' };
+  let gestureTried = false;
   const windowId = (await chrome.tabs.get(session.tabId)).windowId;
   try {
-    await chrome.tabs.update(session.tabId, { active: true, muted: true, autoDiscardable: false });
+    if (!alreadyActive) await chrome.tabs.update(session.tabId, { active: true, muted: true, autoDiscardable: false });
     for (let attempt = 0; attempt < 8; attempt++) {
       const settings = await getSettings();
       if (!settings[flag(platform)]) return { state: 'cancelled' };
@@ -165,10 +200,16 @@ async function startPlayback(session, platform, previousTab, fromBlank = false) 
       if (!tab.active) return { state: 'interrupted' };
       if (initialBlank || reloading || tab.discarded || tab.status === 'loading') {
         playback = { state: tab.discarded ? 'discarded' : 'loading' };
-        session.diagnostic = { platform, ...playback, attempt: attempt + 1, checkedAt: Date.now() };
+        session.diagnostic = { platform, ...playback, browserGesture: gestureTried, attempt: attempt + 1, checkedAt: Date.now() };
       } else if (sameLiveUrl(session.url, tab.url)) {
         playback = await probe(session, true, platform);
-        session.diagnostic = { platform, ...playback, attempt: attempt + 1, checkedAt: Date.now() };
+        if (platform === 'chzzk' && !gestureTried && playback.hidden !== true &&
+            ['NotAllowedError', 'AutoplayUnmutePaused'].includes(playback.reason)) {
+          gestureTried = true;
+          playback = await startWithBrowserGesture(session);
+          session.usedBrowserGesture = playback.state === 'playing';
+        }
+        session.diagnostic = { platform, ...playback, browserGesture: gestureTried, attempt: attempt + 1, checkedAt: Date.now() };
         if (playback.state === 'playing' || playback.state === 'navigation') break;
       }
       if (attempt < 7) await new Promise(resolve => setTimeout(resolve, 1000));
@@ -195,6 +236,67 @@ async function startPlayback(session, platform, previousTab, fromBlank = false) 
       }
     }
   }
+  return playback;
+}
+async function recoverChzzk(session, previousPlayback) {
+  if (Date.now() - (session.lastForegroundRecoveryAt || 0) < 10 * 60000) return previousPlayback;
+  const settings = await getSettings();
+  const tab = await ownedTab(session);
+  if (!settings.autoCollectChzzk) return { state: 'cancelled' };
+  if (!tab) return { state: 'navigation' };
+  if (tab.status === 'loading') return { state: 'loading' };
+  session.lastForegroundRecoveryAt = Date.now();
+  const [previousActive] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+  let windowBefore, previousWindow, focusedForRecovery = false;
+  let playback = previousPlayback;
+  try {
+    if (chrome.windows) {
+      windowBefore = await chrome.windows.get(tab.windowId);
+      previousWindow = await chrome.windows.getLastFocused();
+      if (!windowBefore.focused || windowBefore.state === 'minimized') {
+        await chrome.windows.update(tab.windowId, { focused: true,
+          ...(windowBefore.state === 'minimized' ? { state: 'normal' } : {}) });
+        focusedForRecovery = true;
+      }
+    }
+    if (!await ownedTab(session)) return { state: 'navigation' };
+    if (!(await getSettings()).autoCollectChzzk) return { state: 'cancelled' };
+    await chrome.tabs.update(session.tabId, { active: true, muted: true, autoDiscardable: false });
+    // Recreate an errored/stuck player once per recovery interval, only in our tab.
+    if ((['error', 'stalled', 'missing'].includes(previousPlayback.state) || (session.failures || 0) >= 2) && chrome.tabs.reload) {
+      const current = await ownedTab(session);
+      if (!current) return { state: 'navigation' };
+      if (!current.active) return { state: 'interrupted' };
+      if (!(await getSettings()).autoCollectChzzk) return { state: 'cancelled' };
+      await chrome.tabs.reload(session.tabId);
+    }
+    playback = await startPlayback(session, 'chzzk', previousActive, false, true);
+
+  } catch {
+    session.diagnostic = { ...session.diagnostic, recovery: 'foreground', reason: 'RecoveryFailure', checkedAt: Date.now() };
+    playback = { state: 'injection_error', reason: 'RecoveryFailure' };
+  } finally {
+    if (focusedForRecovery) {
+      try {
+        // A user switching to a different tab/window wins over our restoration.
+        const currentWindow = await chrome.windows.get(tab.windowId);
+        const [active] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+        if (currentWindow.focused && (active?.id === previousActive?.id || active?.id === session.tabId)) {
+          if (windowBefore.state === 'minimized') await chrome.windows.update(tab.windowId, { state: 'minimized' });
+          if (previousWindow?.id && previousWindow.id !== tab.windowId) await chrome.windows.update(previousWindow.id, { focused: true });
+        }
+      } catch { /* A window may have closed during recovery. */ }
+    }
+  }
+  // Restoring a minimized window can hide the page again. Verify that final state.
+  if (playback.state === 'playing' && await ownedTab(session)) {
+    playback = await probe(session, false, 'chzzk');
+    if (!['playing', 'navigation'].includes(playback.state) && (await getSettings()).autoCollectChzzk) {
+      playback = await probe(session, true, 'chzzk');
+    }
+  }
+  session.diagnostic = { platform: 'chzzk', ...playback, recovery: 'foreground',
+    focusedWindow: focusedForRecovery, checkedAt: Date.now() };
   return playback;
 }
 async function ownedTab(session) {
@@ -226,7 +328,6 @@ export function chooseTarget(plan, session, selected, now = Date.now()) {
   const campaign = [current, ...choices.filter(c => c !== current)].find(c =>
     c?.lives.some(l => (session?.cooldowns?.[l.key] || 0) <= now));
   if (!campaign) {
-    if (plan.discoveryLives?.length) return { campaign: { id: 'discovery', title: 'SOOP 미션 참여 확인 중', minutes: null }, live: plan.discoveryLives.find(l => l.key === session?.liveKey) || plan.discoveryLives[0] };
     return null;
   }
   const available = campaign.lives.filter(l => (session?.cooldowns?.[l.key] || 0) <= now).sort((a,b) => b.viewers - a.viewers);
@@ -237,6 +338,11 @@ async function persist(state) { await chrome.storage.local.set({ collectorState:
 async function run() {
   const { collectorState = {} } = await chrome.storage.local.get('collectorState');
   const state = collectorState;
+  if (state.soop) {
+    await release(state.soop);
+    delete state.soop;
+    await persist(state);
+  }
   const day = dropsDay();
   if (state.day && state.day !== day) {
     for (const platform of PLATFORMS) {
@@ -266,13 +372,11 @@ async function run() {
         }
         session.userStopped = true;
       }
-      const plan = platform === 'chzzk' ? await chzzkPlan(selected) : platform === 'soop' ? await soopPlan() :
+      const plan = platform === 'chzzk' ? await chzzkPlan(selected) :
         await twitchPlan(Date.now(), session.liveKey?.startsWith('twitch:') ? session.liveKey.slice(7) : null);
-      if (platform === 'twitch') session.account = plan.login;
+      delete session.account;
       session.campaigns = plan.campaigns.map(c => ({ id:c.id, title:c.title, completed:c.completed, active:c.active,
-        minutes:c.minutes, earned:c.earned, total:c.total, endAt:c.endAt,
-        verificationPending:c.verificationPending || false, manualCompleted:c.manualCompleted || false,
-        manualWatch:c.manualWatch || false }));
+        minutes:c.minutes, earned:c.earned, total:c.total, endAt:c.endAt }));
       session.campaignsCheckedAt = Date.now();
       session.error = null;
       if (plan.catalog) session.catalog = plan.catalog;
@@ -288,18 +392,14 @@ async function run() {
       if (!target) {
         await release(session); delete session.tabId; delete session.url;
         session.status = platform === 'twitch' && plan.needsClaim ? '시청 조건 달성 · 트위치 보상 수령 대기' :
-          platform === 'twitch' && plan.needsVerification ? '트위치 수령 여부 확인 대기 · 중복 시청 방지를 위해 자동 시청 보류' :
           platform === 'twitch' && !plan.campaigns.length ? '이터널리턴 트위치 캠페인 대기 중' :
-          plan.finished && platform === 'twitch' && plan.campaigns.some(c => c.manualCompleted) ?
-            '직접 완료로 표시한 캠페인 포함 · 자동 시청 대기' :
           plan.finished ? '대상 캠페인 완료·종료·보상 소진 · 자동 시청 대기' : '선택한 캠페인의 대상 방송 대기 중';
         session.checkedAt = Date.now(); await persist(state); continue;
       }
       const { campaign, live } = target;
       if (!validLiveUrl(live.url)) throw new Error('대상 방송 주소가 올바르지 않습니다.');
       let tab = await ownedTab(session);
-      const patterns = platform === 'chzzk' ? ['https://chzzk.naver.com/live/*'] : platform === 'soop' ?
-        ['https://play.sooplive.com/*', 'https://play.sooplive.co.kr/*'] : ['https://www.twitch.tv/*', 'https://twitch.tv/*'];
+      const patterns = platform === 'chzzk' ? ['https://chzzk.naver.com/live/*'] : ['https://www.twitch.tv/*', 'https://twitch.tv/*'];
       const others = (await chrome.tabs.query({ url: patterns })).filter(t => t.id !== tab?.id &&
         (platform !== 'twitch' || sameLiveUrl(t.pendingUrl || t.url, t.pendingUrl || t.url)));
       if (others.length) {
@@ -349,17 +449,23 @@ async function run() {
           await chrome.tabs.update(session.tabId, { muted: true, autoDiscardable: false });
         }
       }
+      if (platform === 'chzzk' && !['playing', 'navigation', 'cancelled', 'interrupted', 'loading', 'discarded'].includes(playback.state)) {
+        playback = await recoverChzzk(session, playback);
+      }
       {
         if (playback.state === 'cancelled') { await release(session); state[platform] = { status: '꺼짐' }; await persist(state); continue; }
         if (playback.state === 'navigation') { session.userStopped = true; session.status = '방송 페이지 이동 감지 · 일시 중지'; }
         else if (playback.state === 'interrupted') {
           session.status = `${campaign.title} · 탭 전환 감지 · 다음 확인에서 재생 상태를 다시 확인합니다`;
+        } else if (playback.state === 'loading' || playback.state === 'discarded') {
+          session.status = `${campaign.title} · 방송 페이지 로딩 중 · 다음 확인에서 재생 재시도`;
         } else {
           const playing = playback.state === 'playing';
           session.failures = playing ? 0 : (session.failures || 0) + 1;
           const reason = playback.reason ? ` (${playback.reason})` : '';
           const detail = playback.state === 'missing' ? '플레이어 미감지 · 로그인/재생 화면 확인 필요'
-            : playback.state === 'blocked' ? `음소거 재생 실패${reason} · 다음 확인에서 재시도`
+            : playback.reason === 'BrowserGestureUnavailable' ? '브라우저 재생 권한 사용 실패 · 확장 권한/회사 정책 확인 필요'
+            : playback.state === 'blocked' ? `재생 시작 차단${reason} · 다음 확인에서 재시도`
             : playback.state === 'injection_error' ? '플레이어 검사 실패 · 다음 확인에서 재시도'
             : '재생 재시도 중';
           session.status = `${campaign.title} · ${playing ? '재생 중' : detail}`;
