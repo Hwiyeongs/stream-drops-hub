@@ -27,8 +27,14 @@ export function campaignProgress(detail, claims, challenges, now = Date.now()) {
   const active = start !== null && end !== null && start <= now && now < end && !detail.dropsCampaignNotStarted;
   const progress = challenges.filter(r => rewards.some(d => String(d.rewardNo) === String(r.rewardNo)));
   const minutes = progress.length ? Math.max(...progress.map(r => Number(r.accumWatchMinutes) || 0)) : null;
+  const progressByReward = Object.fromEntries(rewards.filter(r => !earned.has(String(r.rewardNo))).map(reward => {
+    const values = progress.filter(r => String(r.rewardNo) === String(reward.rewardNo))
+      .map(r => r.accumWatchMinutes).filter(value => value != null && String(value).trim() !== '')
+      .map(Number).filter(value => Number.isFinite(value) && value >= 0);
+    return [String(reward.rewardNo), values.length ? Math.max(...values) : null];
+  }));
   return { completed, active, watchable, minutes, earned: rewards.filter(r => earned.has(String(r.rewardNo))).length, total: rewards.length,
-    rewardIds: rewards.map(r => String(r.rewardNo)), endAt: end, startDate: detail.startDate };
+    progressByReward, rewardIds: rewards.map(r => String(r.rewardNo)), endAt: end, startDate: detail.startDate };
 }
 export async function chzzkPlan(selected = 'auto') {
   const [catalog, lives, claimsJson, progressJson] = await Promise.all([

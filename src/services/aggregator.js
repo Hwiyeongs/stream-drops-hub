@@ -2,6 +2,7 @@ import { fetchTwitchDrops, claimTwitchDrop } from './twitch.js';
 import { fetchChzzkDrops, claimChzzkDrop, fetchChzzkCouponCode } from './chzzk.js';
 import { fetchSoopDrops, claimSoopDrop } from './soop.js';
 import { saveCachedDrops, getCachedDrops, getHandledDropsLog, recordHandledDrop, parseExpTimestamp, isRecentDate } from './storage.js';
+import { appendCollectorEvent } from './collector-diagnostics.js';
 
 export function isActiveDrop(drop, handled = {}, now = Date.now()) {
   if (!drop?.claimable || handled[drop.id]) return false;
@@ -50,6 +51,7 @@ export async function claimUnifiedDrop(drop) {
     if (typeof code !== 'string' || !code.trim()) throw new Error('쿠폰 코드를 확인하지 못했습니다. 다시 시도해 주세요.');
     result = { success: true, itemCode: code.trim() };
     await recordHandledDrop({ ...drop, couponCode: code.trim() }, 'saved');
+    await appendCollectorEvent(drop.platform, 'coupon_saved', { campaign: drop.campaignName });
   } else {
     if (drop.platform === 'twitch') result = await claimTwitchDrop(drop.dropInstanceId, drop.twitchUserId);
     else if (drop.platform === 'chzzk') result = await claimChzzkDrop(drop.rewardNo);
@@ -60,6 +62,7 @@ export async function claimUnifiedDrop(drop) {
       claimStatus: result.status, claimedAt: result.claimedAt,
       claimConfirmedAt: result.claimConfirmedAt } : drop;
     await recordHandledDrop(receipt, 'claimed');
+    await appendCollectorEvent(drop.platform, 'claimed', { campaign: drop.campaignName });
   }
   // Remove only the confirmed item. Other failures remain visible and retryable.
   const cache = await getCachedDrops();

@@ -2,6 +2,7 @@ import { campaignDisplayDate } from '../src/services/campaign-date.js';
 import { dropsDay } from '../src/services/drops-day.js';
 import { request, fetchAllDrops, claimUnifiedDrop, saveSettings, recordHandledDrop } from '../src/services/client.js';
 import { getCachedDrops, getHandledDropsLog, getSettings, parseExpTimestamp, parseTimestamp, isRecentDate } from '../src/services/storage.js';
+import { getCollectorEvents, REASON_LABELS } from '../src/services/collector-diagnostics.js';
 
 const el = id => document.getElementById(id);
 let settingsBusy = true;
@@ -218,6 +219,17 @@ async function refresh() {
   try { await fetchAllDrops(); } catch (error) { toast(`조회 실패: ${error.message}`, 'error'); }
   finally { refreshing = false; await loadState(); }
 }
+async function renderCollectorEvents() {
+  const list = el('collectorRecentEvents');
+  list.replaceChildren();
+  const events = (await getCollectorEvents()).slice(-8).reverse();
+  if (!events.length) { list.appendChild(create('li', '', '아직 기록된 동작이 없습니다.')); return; }
+  for (const event of events) {
+    const at = new Date(event.at).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+    const platform = { chzzk: '치지직', twitch: '트위치', system: '공통' }[event.platform];
+    list.appendChild(create('li', '', `${at} · ${platform} · ${event.message}${event.campaign ? ' · ' + event.campaign : ''}${event.reason ? ' (' + REASON_LABELS[event.reason] + ')' : ''}`));
+  }
+}
 async function loadSettings() {
   const settings = await getSettings();
   el('settingCollectChzzk').checked = settings.autoCollectChzzk;
@@ -252,6 +264,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       toast('트위치 상태 진단을 복사했습니다.', 'success');
     } catch (error) { toast(error.message, 'error'); }
   });
+  el('copyCollectorStatus').addEventListener('click', async () => {
+    try {
+      const report = await request('GET_COLLECTOR_STATUS_REPORT');
+      await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+      toast('치지직·트위치 자동 수집 진단을 복사했습니다.', 'success');
+    } catch (error) { toast(error.message, 'error'); }
+  });
+  el('collectorRecentDetails').addEventListener('toggle', () => {
+    if (el('collectorRecentDetails').open) void renderCollectorEvents().catch(console.error);
+  });
   el('claimAllBtn').addEventListener('click', async () => {
     if (busy()) return;
     claiming = true; render();
@@ -277,6 +299,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (area !== 'local') return;
     if (Object.keys(changes).some(k => k === 'dropsCache' || k === 'platformStatuses' || k === 'batchJob' || k.startsWith('handled:'))) void loadState().catch(console.error);
     if (changes.collectorState || changes.collectorCatalog) void renderCollector().catch(console.error);
+    if (changes.collectorEvents && el('collectorRecentDetails').open) void renderCollectorEvents().catch(console.error);
     if (changes.liveMonitorState) void renderLiveStatus().catch(console.error);
     if (changes.settings) void loadSettings().catch(console.error);
   });

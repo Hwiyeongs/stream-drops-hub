@@ -157,6 +157,12 @@
           <p class="setting-desc">치지직과 트위치는 한 캠페인을 마친 뒤 다음 캠페인으로 이동합니다. 영상 재생과 서버 시청 시간 적립은 별도로 확인합니다. 트위치 보상 자동 수령은 위의 ‘자동 수령’ 설정을 따릅니다. 치지직·SOOP 쿠폰 코드 확인·복사와 게임 내 입력은 직접 진행해 주세요.</p>
           <p id="collectorStatus" class="setting-desc" role="status" style="white-space:pre-line;overflow-wrap:anywhere"></p>
           <button id="copyTwitchStatus" class="collector-refresh" type="button">트위치 상태 진단 복사</button>
+          <button id="copyCollectorStatus" class="collector-refresh" type="button">전체 자동 수집 진단 복사</button>
+          <details id="collectorRecentDetails" style="margin-top:12px">
+            <summary>최근 자동 수집 동작</summary>
+            <p class="setting-desc">최근 7일 · 최대 100개 저장 · 아래는 최근 8개</p>
+            <ol id="collectorRecentEvents" class="setting-desc" style="padding-left:20px;overflow-wrap:anywhere"></ol>
+          </details>
         </div>
 
         <div class="settings-group">

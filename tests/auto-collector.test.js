@@ -206,6 +206,96 @@ test('Twitch switches to another real live when server watch minutes remain unch
  assert.equal(tabs.length,1);
  assert.equal(tabs[0].url,'https://www.twitch.tv/backup');
 });
+
+test('CHZZK confirms server stagnation before switching inside the same selected campaign',async()=>{
+ data.settings.chzzkCollectCampaign='1';challenges=[{rewardNo:10,accumWatchMinutes:12}];
+ tabs.push({id:99,windowId:1,url:'https://example.com',active:true});
+ await checkCollector();const ownedId=data.collectorState.chzzk.tabId;
+ data.collectorState.chzzk.progressAt=Date.now()-11*60000;
+ await checkCollector();
+ assert.equal(data.collectorState.chzzk.phase,'stalled_recheck');
+ assert.equal(data.collectorState.chzzk.cooldowns,undefined);
+ assert.equal(tabs.find(t=>t.id===ownedId).url,'https://chzzk.naver.com/live/'+channel(1));
+ data.collectorState.chzzk.stalledSince=Date.now()-2*60000-1000;
+ await checkCollector();assert.equal(data.collectorState.chzzk.phase,'stalled_switch');
+ await checkCollector();
+ assert.equal(data.collectorState.chzzk.liveKey,'chzzk:2:1');
+ assert.equal(data.collectorState.chzzk.tabId,ownedId);assert.equal(data.collectorState.chzzk.campaignId,'1');
+ assert.equal(tabs.find(t=>t.id===99).active,true);assert.equal(tabs.find(t=>t.id===ownedId).muted,true);
+ assert.equal(data.collectorEvents.some(e=>e.type==='stalled_recheck'),true);
+ assert.equal(data.collectorEvents.some(e=>e.type==='stream_switched'),true);
+});
+
+test('CHZZK renewed reward progress cancels stagnation even when campaign maximum stays unchanged',async()=>{
+ details[0].rewardList.push({rewardNo:11,conditionForMinutes:120,codeRemainingCount:10});
+ challenges=[{rewardNo:10,accumWatchMinutes:60},{rewardNo:11,accumWatchMinutes:12}];
+ await checkCollector();data.collectorState.chzzk.progressAt=Date.now()-11*60000;
+ await checkCollector();assert.equal(data.collectorState.chzzk.phase,'stalled_recheck');
+ data.collectorState.chzzk.stalledSince=Date.now()-3*60000;
+ challenges[1].accumWatchMinutes=13;
+ await checkCollector();
+ assert.equal(data.collectorState.chzzk.phase,'playing');assert.equal(data.collectorState.chzzk.stalledSince,undefined);
+ assert.equal(data.collectorState.chzzk.lastProgress,60);assert.equal(data.collectorState.chzzk.cooldowns,undefined);
+ assert.equal(data.collectorEvents.some(e=>e.type==='progress'),true);
+});
+
+test('CHZZK confirmed stagnation keeps the sole current live and waits for a same-campaign alternative',async()=>{
+ data.settings.chzzkCollectCampaign='1';lives=[live(1,1),live(3,2)];challenges=[{rewardNo:10,accumWatchMinutes:12}];
+ await checkCollector();const id=tabs[0].id;
+ data.collectorState.chzzk.progressAt=Date.now()-11*60000;await checkCollector();
+ data.collectorState.chzzk.stalledSince=Date.now()-3*60000;
+ await checkCollector();assert.equal(data.collectorState.chzzk.phase,'stalled_waiting');
+ assert.equal(data.collectorState.chzzk.cooldowns,undefined);
+ actions=[];await checkCollector();assert.equal(tabs[0].id,id);
+ assert.equal(actions.some(a=>a[0]==='remove'||a[0]==='create'||a[0]==='update'&&a[1].url),false);
+ lives.push(live(2,1));await checkCollector();assert.equal(data.collectorState.chzzk.phase,'stalled_switch');
+ await checkCollector();assert.equal(data.collectorState.chzzk.liveKey,'chzzk:2:1');
+});
+
+test('CHZZK unavailable progress or failed API cannot confirm stagnation',async()=>{
+ challenges=[{rewardNo:10,accumWatchMinutes:12}];await checkCollector();
+ data.collectorState.chzzk.progressAt=Date.now()-11*60000;await checkCollector();
+ data.collectorState.chzzk.stalledSince=Date.now()-3*60000;
+ error=true;await checkCollector();assert.equal(data.collectorState.chzzk.phase,'query_failed');
+ assert.equal(data.collectorState.chzzk.stalledSince,undefined);
+ error=false;challenges=[];await checkCollector();
+ assert.equal(data.collectorState.chzzk.phase,'playing');assert.equal(data.collectorState.chzzk.cooldowns,undefined);
+ assert.equal(data.collectorEvents.some(e=>e.type==='query_recovered'),true);
+});
+
+test('CHZZK unchanged normal samples do not flood diagnostic events',async()=>{
+ challenges=[{rewardNo:10,accumWatchMinutes:12}];await checkCollector();
+ const count=data.collectorEvents.length;await checkCollector();await checkCollector();
+ assert.equal(data.collectorEvents.length,count);
+ claims=[{rewardNo:10}];await checkCollector();
+ assert.equal(data.collectorEvents.some(e=>e.type==='earned'),true);
+});
+
+test('CHZZK cancels a queued stagnation switch if progress resumes or the alternative disappears',async()=>{
+ for(const cause of ['progress','live-disappeared']){
+  data={settings:{autoCollectChzzk:true,autoCollectTwitch:false,chzzkCollectCampaign:'1'}};
+  tabs=[];actions=[];lives=[live(1,1),live(2,1)];challenges=[{rewardNo:10,accumWatchMinutes:12}];
+  await checkCollector();const id=tabs[0].id;
+  data.collectorState.chzzk.progressAt=Date.now()-11*60000;await checkCollector();
+  data.collectorState.chzzk.stalledSince=Date.now()-3*60000;await checkCollector();
+  assert.equal(data.collectorState.chzzk.phase,'stalled_switch');
+  if(cause==='progress')challenges[0].accumWatchMinutes=13;else lives=[live(1,1)];
+  actions=[];await checkCollector();
+  assert.equal(tabs[0].id,id);assert.equal(data.collectorState.chzzk.liveKey,'chzzk:1:1');
+  assert.equal(actions.some(a=>a[0]==='update'&&a[1].url),false);
+  assert.equal(data.collectorState.chzzk.phase,cause==='progress'?'playing':'stalled_waiting');
+ }
+});
+
+test('CHZZK rejects an old stagnation confirmation after a browser sleep gap',async()=>{
+ challenges=[{rewardNo:10,accumWatchMinutes:12}];await checkCollector();
+ data.collectorState.chzzk.progressAt=Date.now()-20*60000;
+ data.collectorState.chzzk.lastProgressSampleAt=Date.now()-6*60000;
+ data.collectorState.chzzk.stalledSince=Date.now()-5*60000;
+ await checkCollector();
+ assert.equal(data.collectorState.chzzk.phase,'playing');assert.equal(data.collectorState.chzzk.cooldowns,undefined);
+ assert.equal(data.collectorState.chzzk.stalledSince,undefined);
+});
 test('Twitch player stays unmuted while its owned tab plays silently',async()=>{
  const originalLocation=globalThis.location,originalDocument=globalThis.document;
  const url='https://www.twitch.tv/streamer';

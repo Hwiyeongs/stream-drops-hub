@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Stream Drops Hub",
-  "version": "1.5.21",
+  "version": "1.5.22",
   "description": "치지직(CHZZK), SOOP, 트위치(Twitch) 드롭스를 한곳에서 확인하고 이터널리턴 방송을 자동 시청합니다.",
   "icons": {
     "16": "icons/icon-16.png",

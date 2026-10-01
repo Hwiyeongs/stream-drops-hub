@@ -287,6 +287,16 @@ test('Twitch status report shows receipt metadata without exposing credentials o
   assert.equal(/DO-NOT-COPY|private-user|private-instance|Authorization/.test(JSON.stringify(report)), false);
 });
 
+test('the worker exposes common collector diagnostics only through its extension message handler', async () => {
+  data.settings={autoCollectChzzk:true,autoCollectTwitch:true,autoClaim:true};
+  data.collectorState={chzzk:{phase:'playing',campaignsCheckedAt:Date.now(),diagnostic:{state:'playing'}},
+    twitch:{phase:'waiting_claim',campaignsCheckedAt:Date.now()}};
+  const report=await worker.handleMessage({type:'GET_COLLECTOR_STATUS_REPORT'});
+  assert.equal(report.platforms.chzzk.status,'방송 재생 확인');
+  assert.equal(report.platforms.twitch.phase,'waiting_claim');assert.equal(report.twitchAutoClaim,true);
+  assert.equal(report.platforms.chzzk.stale,false);assert.deepEqual(report.events,[]);
+});
+
 test('Twitch inventory without an account ID retries raw query and cannot report unverified rewards', async () => {
   let calls = 0;
   globalThis.fetch = async () => {

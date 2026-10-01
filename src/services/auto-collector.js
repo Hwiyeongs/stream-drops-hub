@@ -3,6 +3,8 @@ import { getSettings } from './storage.js';
 import { chzzkPlan } from './collector-plans.js';
 import { twitchPlan } from './twitch-collector-plan.js';
 import { validLiveUrl, sameLiveUrl } from './live-monitor.js';
+import { inspectChzzkProgress, resetChzzkObservation } from './collector-progress.js';
+import { appendCollectorEvent, logCollectorTransition, classifyCollectorError } from './collector-diagnostics.js';
 
 export const COLLECT_ALARM = 'collectEternalReturnDrops';
 const PLATFORMS = ['chzzk', 'twitch'];
@@ -345,6 +347,7 @@ async function run() {
   }
   const day = dropsDay();
   if (state.day && state.day !== day) {
+    await appendCollectorEvent('system', 'reset');
     for (const platform of PLATFORMS) {
       const old = state[platform] || {};
       // Keep ownership of a still-open stream; never close a user-navigated tab.
@@ -357,9 +360,11 @@ async function run() {
   for (const platform of PLATFORMS) {
     let settings = await getSettings();
     let session = state[platform] || {};
+    const before = structuredClone(session);
     if (!settings[flag(platform)]) {
       await release(session);
-      state[platform] = { status: '꺼짐', checkedAt: Date.now() };
+      state[platform] = { phase: 'off', status: '꺼짐', checkedAt: Date.now() };
+      await logCollectorTransition(platform, before, state[platform]);
       await persist(state); continue;
     }
     state[platform] = session;
@@ -367,6 +372,8 @@ async function run() {
       const selected = settings.chzzkCollectCampaign || 'auto';
       if (!session.userStopped && session.tabId && !await ownedTab(session)) {
         if (await loadingOwnedTab(session)) {
+          session.phase = 'loading';
+          if (platform === 'chzzk') resetChzzkObservation(session);
           session.status = '방송 페이지 다시 로딩 중 · 다음 확인에서 재생 상태 확인';
           session.checkedAt = Date.now(); await persist(state); continue;
         }
@@ -381,18 +388,35 @@ async function run() {
       if (platform === 'twitch') { session.claimedToday = plan.claimedToday; session.twitchUserId = plan.twitchUserId; }
       session.campaignsCheckedAt = Date.now();
       session.error = null;
+      delete session.queryReason;
       if (plan.catalog) session.catalog = plan.catalog;
       settings = await getSettings();
-      if (!settings[flag(platform)]) { await release(session); state[platform] = { status: '꺼짐' }; await persist(state); continue; }
+      if (!settings[flag(platform)]) { await release(session); state[platform] = { phase: 'off', status: '꺼짐' }; await persist(state); continue; }
       if (platform === 'chzzk' && settings.chzzkCollectCampaign !== selected) continue;
       if (session.userStopped) {
+        session.phase = 'paused';
+        if (platform === 'chzzk') resetChzzkObservation(session);
         session.status = plan.campaigns.length && plan.campaigns.every(c => c.completed) ? '대상 캠페인 수령 완료 · 자동 시청 일시 중지됨' :
           '탭을 닫거나 이동하여 자동 시청 일시 중지됨 · 토글을 껐다 켜면 재개';
         session.checkedAt = Date.now(); await persist(state); continue;
       }
+      // The server or live list can change between confirming a stall and the
+      // next alarm. Revalidate the queued switch before navigating the owned tab.
+      if (platform === 'chzzk' && session.stalledCooldownKey) {
+        const current = plan.campaigns.find(c => c.id === session.campaignId);
+        const unchanged = current && JSON.stringify(current.progressByReward) === JSON.stringify(session.lastRewardProgress) &&
+          current.earned === session.lastEarned && Date.now() - session.lastProgressSampleAt <= 3 * 60000;
+        const currentLive = current?.lives.some(candidate => candidate.key === session.liveKey);
+        const alternative = current?.lives.some(candidate => candidate.key !== session.liveKey && (session.cooldowns?.[candidate.key] || 0) <= Date.now());
+        if (!unchanged || currentLive && !alternative) delete session.cooldowns?.[session.stalledCooldownKey];
+        delete session.stalledCooldownKey;
+      }
       const target = chooseTarget(plan, session, selected);
       if (!target) {
         await release(session); delete session.tabId; delete session.url;
+        session.phase = platform === 'twitch' && plan.needsClaim ? 'waiting_claim' :
+          plan.campaigns.length && plan.campaigns.every(c => c.completed) ? 'complete' : 'waiting_live';
+        if (platform === 'chzzk') resetChzzkObservation(session);
         session.status = platform === 'twitch' && plan.needsClaim ? '시청 조건 달성 · 트위치 보상 수령 대기' :
           platform === 'twitch' && !plan.campaigns.length ? '이터널리턴 트위치 캠페인 대기 중' :
           plan.finished ? '대상 캠페인 완료·종료·보상 소진 · 자동 시청 대기' : '선택한 캠페인의 대상 방송 대기 중';
@@ -406,6 +430,8 @@ async function run() {
         (platform !== 'twitch' || sameLiveUrl(t.pendingUrl || t.url, t.pendingUrl || t.url)));
       if (others.length) {
         await release(session); delete session.tabId; delete session.url;
+        session.phase = 'waiting_other_tab';
+        if (platform === 'chzzk') resetChzzkObservation(session);
         session.status = '다른 방송 탭을 닫아 주세요 · 중복 시청으로 적립이 멈출 수 있어 대기 중';
         await persist(state); continue;
       }
@@ -429,6 +455,7 @@ async function run() {
           }
         }
         Object.assign(session, { tabId: tab.id, url: live.url, liveKey: live.key, campaignId: campaign.id, title: campaign.title, openedAt: Date.now(), failures: 0, lastProgress: campaign.minutes, progressAt: Date.now() });
+        if (platform === 'chzzk') resetChzzkObservation(session);
         await persist(state);
         playback = await startPlayback(session, platform, previousActive, !previous);
       } else {
@@ -455,14 +482,17 @@ async function run() {
         playback = await recoverChzzk(session, playback);
       }
       {
-        if (playback.state === 'cancelled') { await release(session); state[platform] = { status: '꺼짐' }; await persist(state); continue; }
-        if (playback.state === 'navigation') { session.userStopped = true; session.status = '방송 페이지 이동 감지 · 일시 중지'; }
+        if (playback.state === 'cancelled') { await release(session); state[platform] = { phase: 'off', status: '꺼짐' }; await persist(state); continue; }
+        if (playback.state === 'navigation') { session.phase = 'paused'; session.userStopped = true; session.status = '방송 페이지 이동 감지 · 일시 중지'; }
         else if (playback.state === 'interrupted') {
+          session.phase = 'playback_retry';
           session.status = `${campaign.title} · 탭 전환 감지 · 다음 확인에서 재생 상태를 다시 확인합니다`;
         } else if (playback.state === 'loading' || playback.state === 'discarded') {
+          session.phase = 'loading';
           session.status = `${campaign.title} · 방송 페이지 로딩 중 · 다음 확인에서 재생 재시도`;
         } else {
           const playing = playback.state === 'playing';
+          session.phase = playing ? 'playing' : 'playback_retry';
           session.failures = playing ? 0 : (session.failures || 0) + 1;
           const reason = playback.reason ? ` (${playback.reason})` : '';
           const detail = playback.state === 'missing' ? '플레이어 미감지 · 로그인/재생 화면 확인 필요'
@@ -472,17 +502,40 @@ async function run() {
             : '재생 재시도 중';
           session.status = `${campaign.title} · ${playing ? '재생 중' : detail}`;
           if (session.failures >= 3) {
+            session.phase = 'switch_pending';
             session.cooldowns ||= {}; session.cooldowns[live.key] = Date.now() + 10 * 60000;
             session.status = `재생 오류${reason} · 다음 확인에서 다른 대상 방송으로 전환`;
           }
         }
         if (!Number.isFinite(session.progressAt)) session.progressAt = Date.now();
-        if (campaign.minutes !== null && campaign.minutes !== session.lastProgress) { session.lastProgress = campaign.minutes; session.progressAt = Date.now(); }
+        if (campaign.minutes !== null && campaign.minutes !== session.lastProgress) {
+          session.lastProgress = campaign.minutes;
+          if (platform !== 'chzzk') session.progressAt = Date.now();
+        }
         if (campaign.minutes !== null) session.status += ` · 서버 시청 ${campaign.minutes}분 (${campaign.earned}/${campaign.total}개 달성)`;
         if (platform === 'twitch' && campaign.needsLink) session.status += ' · 게임 계정 연결 권장';
-        if (Date.now() - session.progressAt > 10 * 60000) {
+        if (platform === 'chzzk') {
+          const now = Date.now();
+          const stalled = inspectChzzkProgress(session, campaign, playback.state === 'playing', now);
+          if (stalled === 'recheck') {
+            session.phase = 'stalled_recheck';
+            session.status += ' · 적립 정체: 서버 진행을 2분 더 확인합니다';
+          } else if (stalled === 'confirmed') {
+            const alternative = campaign.lives.some(candidate => candidate.key !== live.key && (session.cooldowns?.[candidate.key] || 0) <= now);
+            if (alternative) {
+              session.cooldowns ||= {}; session.cooldowns[live.key] = now + 10 * 60000;
+              session.stalledCooldownKey = live.key;
+              session.phase = 'stalled_switch';
+              session.status += ' · 적립 정체 재확인 완료: 다음 확인에서 같은 캠페인의 다른 방송으로 전환';
+            } else {
+              session.phase = 'stalled_waiting';
+              session.status += ' · 적립 정체 재확인 완료: 현재 방송 유지 · 같은 캠페인의 다른 방송 대기';
+            }
+          }
+        } else if (Date.now() - session.progressAt > 10 * 60000) {
           session.status += ' · 적립 증가 미확인: 로그인/계정 연결/다른 시청 기기를 확인해 주세요';
           if (platform === 'twitch' && campaign.minutes !== null && playback.state === 'playing') {
+            session.phase = 'stalled_switch';
             session.cooldowns ||= {};
             session.cooldowns[live.key] = Date.now() + 10 * 60000;
             session.status += ' · 다음 확인에서 다른 방송으로 전환';
@@ -491,9 +544,18 @@ async function run() {
       }
       session.checkedAt = Date.now(); session.error = null;
     } catch (error) {
+      session.phase = 'query_failed';
+      session.queryReason = classifyCollectorError(error);
+      if (platform === 'chzzk') {
+        if (session.stalledCooldownKey) delete session.cooldowns?.[session.stalledCooldownKey];
+        delete session.stalledCooldownKey;
+        resetChzzkObservation(session);
+      }
       session.error = error.message; session.status = '조회/처리 실패 · ' + error.message;
       // Do not navigate away or mark rewards complete on API errors.
       session.checkedAt = Date.now();
+    } finally {
+      await logCollectorTransition(platform, before, state[platform]);
     }
     await persist(state);
   }

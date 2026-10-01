@@ -4,6 +4,7 @@ import { registerTwitchHeaderCapture } from '../src/services/twitch-headers.js';
 import { LIVE_ALARM, ensureLiveAlarm, checkLiveMonitor, openLiveNotification } from '../src/services/live-monitor.js';
 import { fetchAllDrops, claimUnifiedDrop } from '../src/services/aggregator.js';
 import { getSettings, saveSettings, initializeStorage, getCachedDrops, getHandledDropsLog, recordHandledDrop, getTwitchStatusReport } from '../src/services/storage.js';
+import { getCollectorStatusReport, appendCollectorEvent } from '../src/services/collector-diagnostics.js';
 
 registerTwitchHeaderCapture();
 
@@ -65,6 +66,7 @@ export async function pollDrops() {
       } catch (error) {
         const attempts = (retries[drop.id]?.attempts || 0) + 1;
         retries[drop.id] = { attempts, nextAt: Date.now() + Math.min(60, 5 * 2 ** Math.min(attempts - 1, 4)) * 60000, error: error.message };
+        await appendCollectorEvent('twitch', 'claim_failed', { campaign: drop.campaignName });
       }
     } else if (!autoClaim && settings.enableNotifications && !notified.has(drop.id)) {
       try {
@@ -125,6 +127,7 @@ export async function handleMessage(message) {
     }
     case 'GET_STATE': return { ...await getCachedDrops(), settings: await getSettings() };
     case 'GET_TWITCH_STATUS_REPORT': return getTwitchStatusReport();
+    case 'GET_COLLECTOR_STATUS_REPORT': return getCollectorStatusReport();
     case 'REFRESH_ALL': return fetchAllDrops();
     case 'CLAIM_DROP': return claimById(message.id);
     case 'RECORD_COPIED': {
