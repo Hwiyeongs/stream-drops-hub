@@ -130,6 +130,7 @@ body {
 .icon-btn:active {
   transform: scale(0.95);
 }
+.icon-btn.active { background-color: var(--bg-subtle); border-color: var(--border-highlight); color: var(--text-primary); }
 
 .rotating {
   animation: spin 0.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
@@ -177,14 +178,6 @@ body {
   color: #fff;
   background-color: var(--bg-subtle);
   font-weight: 600;
-}
-
-.tab-btn-icon {
-  margin-left: auto;
-  padding: 6px 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .tab-badge {

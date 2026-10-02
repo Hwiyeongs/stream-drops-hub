@@ -358,9 +358,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('hideRewardsConfirm').addEventListener('click', hideSelectedRewards);
   el('hideRewardsDialog').addEventListener('cancel', event => { if (busy()) event.preventDefault(); });
   el('hideRewardsDialog').addEventListener('close', () => hideSelection.clear());
-  for (const tab of document.querySelectorAll('.tab-btn')) tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach(t => t.classList.toggle('active', t === tab));
-    currentTab = tab.dataset.tab; render();
+  for (const tab of document.querySelectorAll('[data-tab]')) tab.addEventListener('click', () => {
+    document.querySelectorAll('[data-tab]').forEach(t => t.classList.toggle('active', t === tab));
+    currentTab = tab.dataset.tab;
+    el('settingsBtn').setAttribute('aria-pressed', String(currentTab === 'settings'));
+    render();
   });
   el('refreshCampaigns').addEventListener('click', async () => {
     el('refreshCampaigns').disabled = true;
