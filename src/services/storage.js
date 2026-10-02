@@ -1,10 +1,11 @@
 /** Background-owned writes; per-item keys prevent unrelated records overwriting each other. */
-const DEFAULT_SETTINGS = { pollingIntervalMinutes: 10, enableNotifications: true, autoClaim: false, liveMonitorEnabled: false, liveAutoOpen: false, autoCollectChzzk: false, autoCollectTwitch: false, chzzkCollectCampaign: 'auto', eternalReturnOnly: true };
+const DEFAULT_SETTINGS = { pollingIntervalMinutes: 10, enableNotifications: true, autoClaim: false, liveMonitorEnabled: false, liveAutoOpen: false, autoCollectChzzk: false, autoCollectTwitch: false, chzzkCollectCampaign: 'auto' };
 const HANDLED = 'handled:', COUPON = 'coupon:', HIDDEN = 'hidden:';
 export async function getSettings() {
   const { settings } = await chrome.storage.local.get('settings');
   const result = { ...DEFAULT_SETTINGS, ...settings };
   delete result.autoCollectSoop;
+  delete result.eternalReturnOnly;
   return result;
 }
 export async function saveSettings(values) {
@@ -13,7 +14,7 @@ export async function saveSettings(values) {
     if (![5, 10, 15, 30].includes(values.pollingIntervalMinutes)) throw new Error('지원하지 않는 확인 주기입니다.');
     settings.pollingIntervalMinutes = values.pollingIntervalMinutes;
   }
-  for (const key of ['enableNotifications', 'autoClaim', 'liveMonitorEnabled', 'liveAutoOpen', 'autoCollectChzzk', 'autoCollectTwitch', 'eternalReturnOnly']) {
+  for (const key of ['enableNotifications', 'autoClaim', 'liveMonitorEnabled', 'liveAutoOpen', 'autoCollectChzzk', 'autoCollectTwitch']) {
     if (key in values) {
       if (typeof values[key] !== 'boolean') throw new Error('설정 값이 올바르지 않습니다.');
       settings[key] = values[key];

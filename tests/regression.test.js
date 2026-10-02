@@ -57,7 +57,7 @@ const { fetchSoopDrops, claimSoopDrop, parseItemDateValue } = await import('../s
 const { fetchChzzkDrops } = await import('../src/services/chzzk.js');
 const { fetchWithTimeout } = await import('../src/services/fetch-helper.js');
 const worker = await import('../background/service-worker.js');
-const { rewardGame, isRewardVisible } = await import('../src/services/reward-visibility.js');
+const { isRewardVisible } = await import('../src/services/reward-visibility.js');
 await worker.enqueue(async () => {});
 beforeEach(async () => {
   data = { appVersion: APP_VERSION, itemStorageMigrated: true, settings: { eternalReturnOnly: false } };
@@ -507,67 +507,29 @@ test('collector settings reject invalid campaign IDs and nonboolean toggles',asy
  assert.equal((await storage.getSettings()).chzzkCollectCampaign,'1796');
 });
 
-test('ER filter defaults on and never classifies a reward by campaign or reward title',async()=>{
- delete data.settings;
- assert.equal((await storage.getSettings()).eternalReturnOnly,true);
- assert.equal(rewardGame({platform:'chzzk',campaignName:'이터널리턴',rewardName:'Drops Token',gameTitle:'이터널리턴'}),'unknown');
- assert.equal(rewardGame({platform:'chzzk',gameCategoryId:'VALORANT',campaignName:'이터널리턴'}),'other');
- assert.equal(rewardGame({platform:'chzzk',gameCategoryId:'Black_Survival_Eternal_Return'}),'eternal-return');
- assert.equal(rewardGame({platform:'soop',gameCategoryId:'00040120'}),'eternal-return');
- assert.equal(rewardGame({platform:'twitch',gameSlug:'eternal-return'}),'eternal-return');
- assert.equal(rewardGame({platform:'twitch',officialGameName:'Eternal Return: Black Survival'}),'eternal-return');
- await assert.rejects(storage.saveSettings({eternalReturnOnly:'true'}));
-});
-
-test('inventory retains other-game and unknown cards while counts reflect the ER filter',async()=>{
+test('removed ER filter settings never exclude other-game or unknown inventory rewards',async()=>{
  data.settings={eternalReturnOnly:true};
+ assert.equal('eternalReturnOnly' in await storage.getSettings(),false);
+ await storage.saveSettings({enableNotifications:true});
+ assert.equal('eternalReturnOnly' in data.settings,false);
  chzzkClaims=[{rewardNo:1,categoryId:'Black_Survival_Eternal_Return'},
    {rewardNo:2,categoryId:'Asian_Games',categoryValue:'2026 아시안게임'}, {rewardNo:3}];
  const result=await fetchAllDrops();
- assert.equal(result.drops.length,3);assert.equal(result.totalCount,1);
- assert.equal(result.drops.find(d=>d.rewardNo===2).gameCategoryId,'Asian_Games');
- const settings=await storage.getSettings();
- assert.deepEqual(result.drops.filter(d=>isRewardVisible(d,settings)).map(d=>d.id),['chzzk_1']);
- await storage.saveSettings({eternalReturnOnly:false});
- assert.equal(data.dropsCache.filter(d=>isRewardVisible(d,{eternalReturnOnly:false})).length,3);
+ assert.equal(result.drops.length,3);assert.equal(result.totalCount,3);assert.equal(result.claimableCount,3);
+ assert.deepEqual(result.drops.filter(d=>isRewardVisible(d)).map(d=>d.id),['chzzk_1','chzzk_2','chzzk_3']);
+ data.appVersion='old';data.settings.eternalReturnOnly=true;
+ await storage.initializeStorage();assert.equal('eternalReturnOnly' in data.settings,false);
 });
 
-test('CHZZK classification uses exact official campaign and reward IDs for generic reward names',async()=>{
- chzzkClaims=[{rewardNo:10,campaignNo:1001},{rewardNo:11},{rewardNo:12,campaignNo:1002}];
- const original=globalThis.fetch;const queries=[];
+test('inventory no longer makes extra game-classification catalog or detail requests',async()=>{
+ chzzkClaims=[{rewardNo:11,campaignNo:1001}];
+ const original=globalThis.fetch;const extra=[];
  globalThis.fetch=async(url,options)=>{
-  if(url.endsWith('/info'))return json({code:200,content:{dropsCampaignList:[{campaignNo:1001,title:'MID SEASON'}]}});
-  if(url.includes('/drops/campaigns/')){
-   queries.push(url);const id=url.split('/').at(-1);
-   return json({code:200,content:{campaignNo:Number(id),categoryId:id==='1001'?'Black_Survival_Eternal_Return':'Other_Game',rewardList:[{rewardNo:id==='1001'?11:12}]}});
-  }
+  if(url.endsWith('/info')||url.includes('/drops/campaigns/'))extra.push(url);
   return original(url,options);
  };
- const result=await fetchChzzkDrops();
- assert.equal(result.loggedIn,true);assert.equal(result.error,null);
- assert.deepEqual(result.drops.map(rewardGame),['eternal-return','eternal-return','other']);
- assert.equal(queries.length,2);
-});
-
-test('CHZZK unavailable classification stays unknown without invalidating the inventory or guessing from titles',async()=>{
- chzzkClaims=[{rewardNo:11,campaign:{campaignName:'이터널리턴 시즌12',campaignNo:1001}}];
- const result=await fetchChzzkDrops();
- assert.equal(result.loggedIn,true);assert.equal(result.error,null);assert.equal(result.drops.length,1);
- assert.equal(rewardGame(result.drops[0]),'unknown');
-});
-
-test('conflicting official reward mappings remain unknown regardless of request completion order',async()=>{
- chzzkClaims=[{rewardNo:11},{rewardNo:12,campaignNo:1002}];
- const original=globalThis.fetch;
- globalThis.fetch=async(url,options)=>{
-  if(url.endsWith('/info'))return json({code:200,content:{dropsCampaignList:[{campaignNo:1001}]}});
-  if(url.includes('/drops/campaigns/')){
-   const id=url.split('/').at(-1);
-   return json({code:200,content:{campaignNo:Number(id),categoryId:id==='1001'?'Black_Survival_Eternal_Return':'Other_Game',rewardList:[{rewardNo:11}]}});
-  }
-  return original(url,options);
- };
- const result=await fetchChzzkDrops();assert.equal(rewardGame(result.drops[0]),'unknown');
+ const result=await fetchChzzkDrops();assert.equal(result.drops.length,1);assert.equal(result.error,null);
+ assert.deepEqual(extra,[]);
 });
 
 test('hiding and restoring survive refresh and upgrades without changing handled history or coupon codes',async()=>{
@@ -597,20 +559,16 @@ test('a hidden reward keeps only display metadata and can be restored even after
  await assert.rejects(worker.handleMessage({type:'HIDE_DROP',id:'unknown'}),/現在|현재/);
 });
 
-test('ER-filtered and hidden Twitch rewards cannot be automatically claimed or notified',async()=>{
+test('hidden Twitch rewards cannot be automatically claimed or notified even with old filter settings',async()=>{
  data.settings={eternalReturnOnly:true,autoClaim:true,enableNotifications:true};
  campaigns=[{...campaign(),game:{slug:'other-game',displayName:'Other Game'}}];
- await worker.pollDrops();assert.equal(mutations.length,0);assert.equal(notifications.length,0);
- assert.equal(data.dropsCache.length,1);
- await assert.rejects(worker.handleMessage({type:'CLAIM_DROP',id:'twitch_instance-B'}),/필터/);
- campaigns=[{...campaign(),game:{slug:'eternal-return',displayName:'Eternal Return'}}];
  await fetchAllDrops();await worker.handleMessage({type:'HIDE_DROP',id:'twitch_instance-B'});
  await worker.pollDrops();assert.equal(mutations.length,0);assert.equal(notifications.length,0);
  await worker.handleMessage({type:'RESTORE_DROP',id:'twitch_instance-B'});
  await worker.pollDrops();assert.equal(mutations.length,1);assert.equal(data['handled:twitch_instance-B'].actionType,'claimed');
 });
 
-test('batch claiming skips newly hidden or filtered rewards even when passed outdated popup IDs',async()=>{
+test('batch claiming skips newly hidden rewards but includes other games despite old filter settings',async()=>{
  data.settings={eternalReturnOnly:true};
  chzzkClaims=[{rewardNo:1,categoryId:'Black_Survival_Eternal_Return',rewardType:'CODE',code:'A'},
    {rewardNo:2,categoryId:'Other_Game',rewardType:'CODE',code:'B'},
@@ -618,6 +576,6 @@ test('batch claiming skips newly hidden or filtered rewards even when passed out
  await fetchAllDrops();await worker.handleMessage({type:'HIDE_DROP',id:'chzzk_3'});
  data.batchJob={status:'running',remaining:['chzzk_1','chzzk_2','chzzk_3'],successCount:0,errors:[]};
  await worker.processBatch();
- assert.equal(data.batchJob.successCount,1);assert.equal(data.batchJob.errors.length,2);
- assert.equal(data['handled:chzzk_1'].couponCode,'A');assert.equal(data['handled:chzzk_2'],undefined);assert.equal(data['handled:chzzk_3'],undefined);
+ assert.equal(data.batchJob.successCount,2);assert.equal(data.batchJob.errors.length,1);
+ assert.equal(data['handled:chzzk_1'].couponCode,'A');assert.equal(data['handled:chzzk_2'].couponCode,'B');assert.equal(data['handled:chzzk_3'],undefined);
 });

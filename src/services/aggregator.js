@@ -1,7 +1,7 @@
 import { fetchTwitchDrops, claimTwitchDrop } from './twitch.js';
 import { fetchChzzkDrops, claimChzzkDrop, fetchChzzkCouponCode } from './chzzk.js';
 import { fetchSoopDrops, claimSoopDrop } from './soop.js';
-import { saveCachedDrops, getCachedDrops, getHandledDropsLog, recordHandledDrop, parseExpTimestamp, isRecentDate, getSettings, getHiddenDrops } from './storage.js';
+import { saveCachedDrops, getCachedDrops, getHandledDropsLog, recordHandledDrop, parseExpTimestamp, isRecentDate, getHiddenDrops } from './storage.js';
 import { isRewardVisible } from './reward-visibility.js';
 import { appendCollectorEvent } from './collector-diagnostics.js';
 
@@ -33,16 +33,15 @@ export async function fetchAllDrops() {
   const handled = await getHandledDropsLog();
   const active = drops.filter(d => isActiveDrop(d, handled));
   const cache = await saveCachedDrops(active, statuses);
-  const [settings, hidden] = await Promise.all([getSettings(), getHiddenDrops()]);
-  const visible = active.filter(drop => isRewardVisible(drop, settings, hidden));
+  const hidden = await getHiddenDrops();
+  const visible = active.filter(drop => isRewardVisible(drop, hidden));
   return { ...cache, totalCount: visible.length, claimableCount: visible.filter(d => !d.stale).length };
 }
 
 export async function claimUnifiedDrop(drop) {
   const handled = (await getHandledDropsLog())[drop.id];
   if (handled) return { success: true, itemCode: handled.couponCode, alreadyHandled: true };
-  const [settings, hidden] = await Promise.all([getSettings(), getHiddenDrops()]);
-  if (!isRewardVisible(drop, settings, hidden)) throw new Error('숨김 또는 이터널리턴 필터로 제외된 보상입니다. 설정을 변경한 뒤 다시 확인해 주세요.');
+  if (!isRewardVisible(drop, await getHiddenDrops())) throw new Error('숨긴 보상입니다. 설정에서 숨김을 해제한 뒤 다시 확인해 주세요.');
   if (!isActiveDrop(drop)) throw new Error('현재 수령할 수 없는 보상입니다. 새로고침해 주세요.');
   if (drop.stale) throw new Error('최신 목록 조회에 실패했습니다. 새로고침 후 수령해 주세요.');
   let result;

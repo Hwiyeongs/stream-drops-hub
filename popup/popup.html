@@ -32,6 +32,7 @@
             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
           </svg>
         </button>
+        <button id="rewardMenuBtn" class="icon-btn hidden" title="숨길 보상 선택" aria-label="숨길 보상 선택" aria-haspopup="dialog">⋯</button>
       </div>
     </header>
 
@@ -55,10 +56,6 @@
 
     <!-- Main Content Area -->
     <main class="content">
-      <div id="rewardFilterBar" class="reward-filter-bar">
-        <span id="rewardFilterState"></span>
-        <span id="rewardFilterHint" class="setting-desc"></span>
-      </div>
       <!-- Drops List View -->
       <div id="dropsListView" class="view-panel active">
         <div id="dropsContainer" class="drops-container">
@@ -69,7 +66,7 @@
         <div id="emptyState" class="empty-state hidden">
           <div class="empty-icon">🎉</div>
           <h3>수령 대기 중인 드롭스가 없습니다</h3>
-          <p>현재 필터에 맞는 수령 대기 보상이 없습니다.<br>다른 게임·숨긴 보상은 설정에서 확인할 수 있습니다.</p>
+          <p>수령 대기 보상이 없거나 이미 처리한 보상입니다.<br>숨긴 보상은 설정에서 다시 표시할 수 있습니다.</p>
         </div>
       </div>
 
@@ -91,11 +88,7 @@
       <div id="settingsView" class="view-panel hidden">
         <div class="settings-group">
           <h3 class="settings-group-title">보상 표시</h3>
-          <div class="setting-item">
-            <div class="setting-info"><label class="setting-title" for="settingEternalOnly">이터널리턴 보상만 표시</label><span class="setting-desc">공식 게임·캠페인 정보 기준 · 목록·알림·자동 수령에 적용</span></div>
-            <label class="switch"><input type="checkbox" class="toggle-switch" id="settingEternalOnly"><span class="slider"></span></label>
-          </div>
-          <p class="setting-desc">게임 분류 미확인 보상은 필터를 끄면 확인할 수 있습니다. 기존 수령 기록은 필터와 숨김에 영향을 받지 않습니다.</p>
+          <p class="setting-desc">목록 상단의 ⋯에서 숨길 보상을 선택할 수 있습니다. 기존 수령 기록과 쿠폰 코드는 유지됩니다.</p>
           <details>
             <summary id="hiddenRewardsSummary">숨긴 보상 0개</summary>
             <p id="hiddenRewardsEmpty" class="setting-desc">숨긴 보상이 없습니다.</p>
@@ -214,6 +207,17 @@
     <div id="toastContainer" class="toast-container"></div>
   </div>
 
+  <dialog id="hideRewardsDialog" class="reward-picker" aria-labelledby="hideRewardsTitle" aria-describedby="hideRewardsHint">
+    <h2 id="hideRewardsTitle">숨길 보상 선택</h2>
+    <p id="hideRewardsHint" class="setting-desc">현재 탭의 보상을 선택해 목록·알림·자동 수령에서 제외합니다.</p>
+    <p id="hideRewardsError" class="reward-picker-error hidden" role="status"></p>
+    <div id="hideRewardsList" class="reward-picker-list"></div>
+    <p id="hideRewardsEmpty" class="setting-desc hidden">숨길 보상이 없습니다.</p>
+    <div class="reward-picker-actions">
+      <button id="hideRewardsCancel" class="collector-refresh">취소</button>
+      <button id="hideRewardsConfirm" class="btn-claim" disabled>선택한 보상 숨기기</button>
+    </div>
+  </dialog>
   <script type="module" src="popup.js"></script>
 </body>
 </html>

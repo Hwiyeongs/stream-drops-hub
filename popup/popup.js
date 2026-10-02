@@ -2,12 +2,12 @@ import { campaignDisplayDate } from '../src/services/campaign-date.js';
 import { dropsDay } from '../src/services/drops-day.js';
 import { request, fetchAllDrops, claimUnifiedDrop, saveSettings, recordHandledDrop } from '../src/services/client.js';
 import { getCachedDrops, getHandledDropsLog, getSettings, getHiddenDrops, parseExpTimestamp, parseTimestamp, isRecentDate } from '../src/services/storage.js';
-import { rewardGame, isRewardVisible } from '../src/services/reward-visibility.js';
+import { isRewardVisible } from '../src/services/reward-visibility.js';
 import { getCollectorEvents, REASON_LABELS } from '../src/services/collector-diagnostics.js';
 
 const el = id => document.getElementById(id);
 let settingsBusy = true;
-const settingKeys = { settingNotify: 'enableNotifications', settingAutoClaim: 'autoClaim', settingInterval: 'pollingIntervalMinutes', settingLiveMonitor: 'liveMonitorEnabled', settingLiveAutoOpen: 'liveAutoOpen', settingCollectChzzk: 'autoCollectChzzk', settingCollectTwitch: 'autoCollectTwitch', settingCollectCampaign: 'chzzkCollectCampaign', settingEternalOnly: 'eternalReturnOnly' };
+const settingKeys = { settingNotify: 'enableNotifications', settingAutoClaim: 'autoClaim', settingInterval: 'pollingIntervalMinutes', settingLiveMonitor: 'liveMonitorEnabled', settingLiveAutoOpen: 'liveAutoOpen', settingCollectChzzk: 'autoCollectChzzk', settingCollectTwitch: 'autoCollectTwitch', settingCollectCampaign: 'chzzkCollectCampaign' };
 const settingIds = Object.keys(settingKeys);
 async function renderLiveStatus() {
   const [{ liveMonitorState: state }, settings] = await Promise.all([chrome.storage.local.get('liveMonitorState'), getSettings()]);
@@ -42,7 +42,8 @@ function enableSettingControls() {
   settingIds.map(el).forEach(c => { c.disabled = settingsBusy; });
   el('settingLiveAutoOpen').disabled = settingsBusy || !el('settingLiveMonitor').checked;
 }
-let currentTab = 'all', drops = [], allDrops = [], log = {}, hiddenDrops = {}, viewSettings = {}, statuses = {}, batchJob = null;
+let currentTab = 'all', drops = [], log = {}, hiddenDrops = {}, statuses = {}, batchJob = null;
+const hideSelection = new Set();
 let refreshing = false, claiming = false, renderRevision = 0, lastBatchNotice = null;
 let toastTimer = null;
 const create = (tag, className, text) => {
@@ -71,12 +72,11 @@ function active(drop) {
 function filteredDrops() { return currentTab === 'all' ? drops : drops.filter(d => d.platform === currentTab); }
 async function loadState() {
   const revision = ++renderRevision;
-  const [cached, handled, state, hidden, settings] = await Promise.all([getCachedDrops(), getHandledDropsLog(), chrome.storage.local.get('batchJob'), getHiddenDrops(), getSettings()]);
+  const [cached, handled, state, hidden] = await Promise.all([getCachedDrops(), getHandledDropsLog(), chrome.storage.local.get('batchJob'), getHiddenDrops()]);
   if (revision !== renderRevision) return;
   log = handled;
-  hiddenDrops = hidden; viewSettings = settings;
-  allDrops = cached.drops.filter(active);
-  drops = allDrops.filter(drop => isRewardVisible(drop, settings, hidden));
+  hiddenDrops = hidden;
+  drops = cached.drops.filter(drop => active(drop) && isRewardVisible(drop, hidden));
   statuses = cached.platformStatuses;
   batchJob = state.batchJob;
   const partial = Object.values(statuses).some(s => s.error);
@@ -87,6 +87,7 @@ async function loadState() {
   }
   render();
   renderHiddenDrops();
+  if (el('hideRewardsDialog').open) renderHidePicker();
 }
 function datedCards(items, history) {
     const receivedTime = d => parseTimestamp(history ? (d.receivedAt ?? d.handledAt) : (d.acquiredAt ?? d.recentDate ?? d.campaignDate ?? (d.platform === 'twitch' ? campaignDisplayDate(d.campaignName, d.expDate) : null))) || 0;
@@ -110,11 +111,8 @@ function datedCards(items, history) {
     return nodes;
 }
 function render() {
-  el('rewardFilterBar').classList.toggle('hidden', ['log', 'settings'].includes(currentTab));
-  el('rewardFilterState').textContent = viewSettings.eternalReturnOnly ? '이터널리턴만 표시 중' : '모든 게임 표시 중';
-  const unknown = allDrops.filter(drop => !hiddenDrops[drop.id] && rewardGame(drop) === 'unknown').length;
-  el('rewardFilterHint').textContent = viewSettings.eternalReturnOnly ?
-    `다른 게임·분류 미확인 보상 제외${unknown ? ' · 분류 미확인 ' + unknown + '개' : ''}` : '';
+  el('rewardMenuBtn').classList.toggle('hidden', ['log', 'settings'].includes(currentTab));
+  el('rewardMenuBtn').disabled = busy() || refreshing || !filteredDrops().length;
   for (const [id, platform] of [['badgeAll', null], ['badgeChzzk', 'chzzk'], ['badgeSoop', 'soop'], ['badgeTwitch', 'twitch']]) {
     el(id).textContent = platform ? drops.filter(d => d.platform === platform).length : drops.length;
   }
@@ -175,7 +173,6 @@ function card(drop, history, hidden = false) {
   if (history) sub.appendChild(create('span', 'action-badge', ({ copied: '코드 복사됨', saved: '코드 보관됨', claimed: '수령 완료' })[drop.actionType] || '기록됨'));
   if (drop.stale && !history) sub.appendChild(create('span', 'action-badge', '최신 조회 필요'));
   if (hidden) sub.appendChild(create('span', 'action-badge', '숨김'));
-  else if (!history && rewardGame(drop) === 'unknown') sub.appendChild(create('span', 'action-badge', '게임 분류 미확인'));
   if (drop.couponCode && !hidden) {
     const code = create('button', 'coupon-code-badge', drop.couponCode); code.title = '코드 복사';
     code.disabled = busy();
@@ -194,10 +191,10 @@ function card(drop, history, hidden = false) {
     button.addEventListener('click', () => drop.couponCode ? copyCode(drop) : claim(drop));
     actions.appendChild(button);
   }
-  if (!history) {
-    const button = create('button', 'btn-link reward-visibility-action', hidden ? '숨김 해제' : '숨기기');
+  if (hidden) {
+    const button = create('button', 'btn-link reward-visibility-action', '숨김 해제');
     button.disabled = busy();
-    button.addEventListener('click', () => setRewardHidden(drop, !hidden));
+    button.addEventListener('click', () => restoreReward(drop));
     actions.appendChild(button);
   }
   const url = safeUrl(drop.campaignUrl);
@@ -205,15 +202,58 @@ function card(drop, history, hidden = false) {
   node.appendChild(actions);
   return node;
 }
-async function setRewardHidden(drop, hidden) {
+async function restoreReward(drop) {
   if (busy()) return;
   claiming = true; render();
   try {
-    await request(hidden ? 'HIDE_DROP' : 'RESTORE_DROP', { id: drop.id });
-    toast(hidden ? '보상을 숨겼습니다. 설정에서 다시 표시할 수 있습니다.' :
-      viewSettings.eternalReturnOnly && rewardGame(drop) !== 'eternal-return' ? '숨김을 해제했습니다. 전체 게임을 보려면 이터널리턴 필터를 꺼 주세요.' : '보상 숨김을 해제했습니다.', 'success');
+    await request('RESTORE_DROP', { id: drop.id });
+    toast('보상 숨김을 해제했습니다.', 'success');
   } catch (error) { toast(error.message, 'error'); }
   finally { claiming = false; await loadState(); }
+}
+function updateHidePickerControls() {
+  el('hideRewardsConfirm').disabled = busy() || !hideSelection.size;
+  el('hideRewardsConfirm').textContent = claiming ? '숨기는 중…' : `선택한 보상 숨기기${hideSelection.size ? ' (' + hideSelection.size + ')' : ''}`;
+  el('hideRewardsCancel').disabled = busy();
+}
+function renderHidePicker() {
+  const items = filteredDrops();
+  const ids = new Set(items.map(drop => drop.id));
+  for (const id of hideSelection) if (!ids.has(id)) hideSelection.delete(id);
+  const rows = items.map(drop => {
+    const row = create('label', 'reward-picker-row');
+    const checkbox = create('input', ''); checkbox.type = 'checkbox'; checkbox.value = drop.id;
+    checkbox.checked = hideSelection.has(drop.id); checkbox.disabled = busy();
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) hideSelection.add(drop.id); else hideSelection.delete(drop.id);
+      updateHidePickerControls();
+    });
+    const details = create('span', 'drop-details');
+    const name = create('span', 'drop-name', `${drop.platformName || drop.platform} · ${drop.rewardName}`); name.title = name.textContent;
+    const campaign = create('span', 'drop-game', drop.campaignName || drop.gameTitle || ''); campaign.title = campaign.textContent;
+    details.append(name, campaign); row.append(checkbox, details); return row;
+  });
+  el('hideRewardsList').replaceChildren(...rows);
+  el('hideRewardsEmpty').classList.toggle('hidden', items.length > 0);
+  updateHidePickerControls();
+}
+async function hideSelectedRewards() {
+  if (busy() || !hideSelection.size) return;
+  const ids = [...hideSelection]; let success = 0; const errors = [];
+  el('hideRewardsError').classList.add('hidden');
+  claiming = true; render(); renderHidePicker();
+  try {
+    for (const id of ids) {
+      try { await request('HIDE_DROP', { id }); success++; hideSelection.delete(id); }
+      catch (error) { errors.push(error.message); }
+    }
+    if (!errors.length) el('hideRewardsDialog').close();
+    else {
+      el('hideRewardsError').textContent = `${success}개 숨김 · ${errors.length}개 실패: ${errors[0]}`;
+      el('hideRewardsError').classList.remove('hidden');
+    }
+    toast(errors.length ? `${success}개 숨김 · ${errors.length}개 실패: ${errors[0]}` : `${success}개 보상을 숨겼습니다. 설정에서 다시 표시할 수 있습니다.`, errors.length ? 'warning' : 'success');
+  } finally { claiming = false; await loadState(); }
 }
 function renderHiddenDrops() {
   const entries = Object.values(hiddenDrops).sort((a, b) => b.hiddenAt - a.hiddenAt);
@@ -265,7 +305,6 @@ async function renderCollectorEvents() {
 }
 async function loadSettings() {
   const settings = await getSettings();
-  el('settingEternalOnly').checked = settings.eternalReturnOnly;
   el('settingCollectChzzk').checked = settings.autoCollectChzzk;
   el('settingCollectTwitch').checked = settings.autoCollectTwitch;
   await renderCollector();
@@ -281,6 +320,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const settingControls = settingIds.map(el);
   settingControls.forEach(control => { control.disabled = true; });
   el('versionTag').textContent = 'v' + chrome.runtime.getManifest().version;
+  el('rewardMenuBtn').addEventListener('click', () => {
+    if (busy() || refreshing) return;
+    hideSelection.clear(); el('hideRewardsError').classList.add('hidden'); renderHidePicker(); el('hideRewardsDialog').showModal();
+  });
+  el('hideRewardsCancel').addEventListener('click', () => el('hideRewardsDialog').close());
+  el('hideRewardsConfirm').addEventListener('click', hideSelectedRewards);
+  el('hideRewardsDialog').addEventListener('cancel', event => { if (busy()) event.preventDefault(); });
+  el('hideRewardsDialog').addEventListener('close', () => hideSelection.clear());
   for (const tab of document.querySelectorAll('.tab-btn')) tab.addEventListener('click', () => {
     document.querySelectorAll('.tab-btn').forEach(t => t.classList.toggle('active', t === tab));
     currentTab = tab.dataset.tab; render();

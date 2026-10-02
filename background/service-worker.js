@@ -56,7 +56,7 @@ export async function pollDrops() {
   for (const drop of result.drops) {
     if (drop.stale) continue;
     const settings = await getSettings();
-    if (!isRewardVisible(drop, settings, await getHiddenDrops())) continue;
+    if (!isRewardVisible(drop, await getHiddenDrops())) continue;
     const autoClaim = settings.autoClaim && drop.platform === 'twitch';
     if (autoClaim && (!retries[drop.id] || retries[drop.id].nextAt <= Date.now())) {
       try {
