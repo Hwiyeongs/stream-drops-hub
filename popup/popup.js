@@ -229,7 +229,7 @@ async function restoreReward(drop) {
 }
 function updateHidePickerControls() {
   el('hideRewardsConfirm').disabled = busy() || !hideSelection.size;
-  el('hideRewardsConfirm').textContent = claiming ? '숨기는 중…' : `선택한 보상 숨기기${hideSelection.size ? ' (' + hideSelection.size + ')' : ''}`;
+  el('hideRewardsConfirm').textContent = claiming ? '숨기는 중…' : `숨기기${hideSelection.size ? ' (' + hideSelection.size + ')' : ''}`;
   el('hideRewardsCancel').disabled = busy();
 }
 function renderHidePicker() {
@@ -244,10 +244,24 @@ function renderHidePicker() {
       if (checkbox.checked) hideSelection.add(drop.id); else hideSelection.delete(drop.id);
       updateHidePickerControls();
     });
-    const details = create('span', 'drop-details');
-    const name = create('span', 'drop-name', `${drop.platformName || drop.platform} · ${drop.rewardName}`); name.title = name.textContent;
-    const campaign = create('span', 'drop-game', drop.campaignName || drop.gameTitle || ''); campaign.title = campaign.textContent;
-    details.append(name, campaign); row.append(checkbox, details); return row;
+    const imageUrl = safeUrl(drop.rewardImageUrl);
+    const fallback = () => create('span', 'reward-picker-thumb reward-picker-thumb-fallback', '🎁');
+    let thumbnail;
+    if (imageUrl) {
+      thumbnail = create('img', 'reward-picker-thumb'); thumbnail.src = imageUrl; thumbnail.alt = '';
+      thumbnail.addEventListener('error', () => thumbnail.replaceWith(fallback()), { once: true });
+    } else thumbnail = fallback();
+    const details = create('span', 'drop-details'), title = create('span', 'drop-title-row');
+    const platform = ['chzzk', 'soop', 'twitch'].includes(drop.platform) ? drop.platform : 'unknown';
+    title.appendChild(create('span', `platform-pill pill-${platform}`, drop.platformName || drop.platform));
+    const name = create('span', 'drop-name', drop.rewardName); name.title = drop.rewardName;
+    title.appendChild(name); details.appendChild(title);
+    const campaignName = drop.campaignName || drop.gameTitle || '';
+    row.title = [drop.platformName || drop.platform, drop.rewardName, campaignName].filter(Boolean).join('\n');
+    if (drop.platform === 'twitch' && campaignName && campaignName !== drop.rewardName) {
+      details.appendChild(create('span', 'drop-game', campaignName));
+    }
+    row.append(checkbox, thumbnail, details); return row;
   });
   el('hideRewardsList').replaceChildren(...rows);
   el('hideRewardsEmpty').classList.toggle('hidden', items.length > 0);
