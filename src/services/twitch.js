@@ -161,6 +161,7 @@ export async function fetchTwitchInventory() {
               endAt
               game {
                 id
+                slug
                 displayName
                 boxArtURL
               }
@@ -281,6 +282,8 @@ export async function fetchTwitchDrops() {
         platform: 'twitch',
         platformName: '트위치',
         gameTitle,
+        officialGameName: campaign.game?.displayName || null,
+        gameSlug: campaign.game?.slug || null,
         campaignName: campaign.name,
         campaignId: campaign.id == null ? null : String(campaign.id),
         timeBasedDropId: timeDrop.id == null ? null : String(timeDrop.id),

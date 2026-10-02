@@ -55,6 +55,10 @@
 
     <!-- Main Content Area -->
     <main class="content">
+      <div id="rewardFilterBar" class="reward-filter-bar">
+        <span id="rewardFilterState"></span>
+        <span id="rewardFilterHint" class="setting-desc"></span>
+      </div>
       <!-- Drops List View -->
       <div id="dropsListView" class="view-panel active">
         <div id="dropsContainer" class="drops-container">
@@ -65,7 +69,7 @@
         <div id="emptyState" class="empty-state hidden">
           <div class="empty-icon">🎉</div>
           <h3>수령 대기 중인 드롭스가 없습니다</h3>
-          <p>이미 획득 완료되었거나 유효기간이 지난 보상은 표시되지 않습니다.</p>
+          <p>현재 필터에 맞는 수령 대기 보상이 없습니다.<br>다른 게임·숨긴 보상은 설정에서 확인할 수 있습니다.</p>
         </div>
       </div>
 
@@ -85,6 +89,19 @@
 
       <!-- Settings View -->
       <div id="settingsView" class="view-panel hidden">
+        <div class="settings-group">
+          <h3 class="settings-group-title">보상 표시</h3>
+          <div class="setting-item">
+            <div class="setting-info"><label class="setting-title" for="settingEternalOnly">이터널리턴 보상만 표시</label><span class="setting-desc">공식 게임·캠페인 정보 기준 · 목록·알림·자동 수령에 적용</span></div>
+            <label class="switch"><input type="checkbox" class="toggle-switch" id="settingEternalOnly"><span class="slider"></span></label>
+          </div>
+          <p class="setting-desc">게임 분류 미확인 보상은 필터를 끄면 확인할 수 있습니다. 기존 수령 기록은 필터와 숨김에 영향을 받지 않습니다.</p>
+          <details>
+            <summary id="hiddenRewardsSummary">숨긴 보상 0개</summary>
+            <p id="hiddenRewardsEmpty" class="setting-desc">숨긴 보상이 없습니다.</p>
+            <div id="hiddenRewardsContainer" class="drops-container" style="margin-top:10px"></div>
+          </details>
+        </div>
         <div class="settings-group">
           <h3 class="settings-group-title">자동화 및 알림</h3>
           

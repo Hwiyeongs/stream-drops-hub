@@ -3,7 +3,8 @@ import { fetchCampaignCatalog } from '../src/services/collector-plans.js';
 import { registerTwitchHeaderCapture } from '../src/services/twitch-headers.js';
 import { LIVE_ALARM, ensureLiveAlarm, checkLiveMonitor, openLiveNotification } from '../src/services/live-monitor.js';
 import { fetchAllDrops, claimUnifiedDrop } from '../src/services/aggregator.js';
-import { getSettings, saveSettings, initializeStorage, getCachedDrops, getHandledDropsLog, recordHandledDrop, getTwitchStatusReport } from '../src/services/storage.js';
+import { getSettings, saveSettings, initializeStorage, getCachedDrops, getHandledDropsLog, recordHandledDrop, getTwitchStatusReport, getHiddenDrops, hideDrop, restoreDrop } from '../src/services/storage.js';
+import { isRewardVisible } from '../src/services/reward-visibility.js';
 import { getCollectorStatusReport, appendCollectorEvent } from '../src/services/collector-diagnostics.js';
 
 registerTwitchHeaderCapture();
@@ -55,6 +56,7 @@ export async function pollDrops() {
   for (const drop of result.drops) {
     if (drop.stale) continue;
     const settings = await getSettings();
+    if (!isRewardVisible(drop, settings, await getHiddenDrops())) continue;
     const autoClaim = settings.autoClaim && drop.platform === 'twitch';
     if (autoClaim && (!retries[drop.id] || retries[drop.id].nextAt <= Date.now())) {
       try {
@@ -128,6 +130,13 @@ export async function handleMessage(message) {
     case 'GET_STATE': return { ...await getCachedDrops(), settings: await getSettings() };
     case 'GET_TWITCH_STATUS_REPORT': return getTwitchStatusReport();
     case 'GET_COLLECTOR_STATUS_REPORT': return getCollectorStatusReport();
+    case 'HIDE_DROP': {
+      const cache = await getCachedDrops();
+      const drop = cache.drops.find(d => d.id === message.id);
+      if (!drop || (await getHandledDropsLog())[drop.id]) throw new Error('숨길 보상이 현재 목록에 없습니다. 새로고침해 주세요.');
+      return hideDrop(drop);
+    }
+    case 'RESTORE_DROP': await restoreDrop(message.id); return { success: true };
     case 'REFRESH_ALL': return fetchAllDrops();
     case 'CLAIM_DROP': return claimById(message.id);
     case 'RECORD_COPIED': {

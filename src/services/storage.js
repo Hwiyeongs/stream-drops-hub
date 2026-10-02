@@ -1,6 +1,6 @@
 /** Background-owned writes; per-item keys prevent unrelated records overwriting each other. */
-const DEFAULT_SETTINGS = { pollingIntervalMinutes: 10, enableNotifications: true, autoClaim: false, liveMonitorEnabled: false, liveAutoOpen: false, autoCollectChzzk: false, autoCollectTwitch: false, chzzkCollectCampaign: 'auto' };
-const HANDLED = 'handled:', COUPON = 'coupon:';
+const DEFAULT_SETTINGS = { pollingIntervalMinutes: 10, enableNotifications: true, autoClaim: false, liveMonitorEnabled: false, liveAutoOpen: false, autoCollectChzzk: false, autoCollectTwitch: false, chzzkCollectCampaign: 'auto', eternalReturnOnly: true };
+const HANDLED = 'handled:', COUPON = 'coupon:', HIDDEN = 'hidden:';
 export async function getSettings() {
   const { settings } = await chrome.storage.local.get('settings');
   const result = { ...DEFAULT_SETTINGS, ...settings };
@@ -13,7 +13,7 @@ export async function saveSettings(values) {
     if (![5, 10, 15, 30].includes(values.pollingIntervalMinutes)) throw new Error('지원하지 않는 확인 주기입니다.');
     settings.pollingIntervalMinutes = values.pollingIntervalMinutes;
   }
-  for (const key of ['enableNotifications', 'autoClaim', 'liveMonitorEnabled', 'liveAutoOpen', 'autoCollectChzzk', 'autoCollectTwitch']) {
+  for (const key of ['enableNotifications', 'autoClaim', 'liveMonitorEnabled', 'liveAutoOpen', 'autoCollectChzzk', 'autoCollectTwitch', 'eternalReturnOnly']) {
     if (key in values) {
       if (typeof values[key] !== 'boolean') throw new Error('설정 값이 올바르지 않습니다.');
       settings[key] = values[key];
@@ -104,6 +104,27 @@ export async function recordHandledDrop(drop, actionType = 'claimed') {
   return entry;
 }
 export async function isDropHandled(id) { return !!(await getHandledDropsLog())[id]; }
+
+export async function getHiddenDrops() {
+  const data = await chrome.storage.local.get(null);
+  return Object.fromEntries(Object.entries(data).filter(([key]) => key.startsWith(HIDDEN))
+    .map(([key, entry]) => [key.slice(HIDDEN.length), entry]));
+}
+export async function hideDrop(drop) {
+  if (!drop?.id || typeof drop.id !== 'string' || drop.id.length > 2048 || !['chzzk', 'soop', 'twitch'].includes(drop.platform)) throw new Error('숨길 보상 정보가 올바르지 않습니다.');
+  // Keep a minimal display snapshot for restoring even when the server removes it.
+  const entry = { id: drop.id, platform: drop.platform, hiddenAt: Date.now() };
+  for (const field of ['platformName', 'rewardName', 'rewardImageUrl', 'gameTitle', 'campaignName', 'campaignUrl',
+    'acquiredAt', 'recentDate', 'campaignDate', 'gameCategoryId', 'gameSlug', 'officialGameName']) {
+    if (drop[field] != null) entry[field] = drop[field];
+  }
+  await chrome.storage.local.set({ [HIDDEN + drop.id]: entry });
+  return entry;
+}
+export async function restoreDrop(id) {
+  if (typeof id !== 'string' || !id || id.length > 2048) throw new Error('보상 ID가 올바르지 않습니다.');
+  await chrome.storage.local.remove(HIDDEN + id);
+}
 
 /** Add verified identity to an existing receipt without changing any historical dates. */
 export async function linkTwitchReceipt(id, identity) {

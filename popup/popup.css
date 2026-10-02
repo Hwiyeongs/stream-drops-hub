@@ -799,3 +799,6 @@ body {
   font-size: 12px;
 }
 .collector-refresh:disabled { opacity: .5; cursor: wait; }
+.reward-filter-bar { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; font-size: 12px; color: var(--text-secondary); }
+.reward-visibility-action { background: transparent; border: none; font-family: inherit; cursor: pointer; }
+.reward-visibility-action:disabled { opacity: .5; cursor: wait; }

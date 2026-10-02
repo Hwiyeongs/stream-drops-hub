@@ -7,6 +7,8 @@
 
 import { fetchWithTimeout } from './fetch-helper.js';
 import { parseExpTimestamp } from './storage.js';
+import { fetchCampaignCatalog } from './collector-plans.js';
+import { rewardGame } from './reward-visibility.js';
 
 const CHZZK_COMMERCIAL_API_V2 = 'https://api.chzzk.naver.com/commercial/v2';
 const CHZZK_COMMERCIAL_API_V1 = 'https://api.chzzk.naver.com/commercial/v1';
@@ -119,6 +121,9 @@ export async function fetchChzzkDrops() {
         platform: 'chzzk',
         platformName: '치지직',
         gameTitle: item.categoryValue || item.campaign?.campaignName || '치지직 드롭스',
+        officialGameName: item.categoryValue || item.category?.categoryValue || null,
+        gameCategoryId: item.categoryId || item.category?.categoryId || item.campaign?.categoryId || null,
+        campaignId: (item.campaign?.campaignNo ?? item.campaignNo) == null ? null : String(item.campaign?.campaignNo ?? item.campaignNo),
         campaignName: item.campaign?.campaignName || '드롭스 보상',
         rewardName: item.rewardName || '치지직 드롭스 보상',
         rewardImageUrl: item.imageUrl || null,
@@ -134,6 +139,7 @@ export async function fetchChzzkDrops() {
       });
     }
 
+    await identifyChzzkGames(drops);
     return {
       loggedIn: true,
       drops,
@@ -146,6 +152,38 @@ export async function fetchChzzkDrops() {
       drops: [],
       error: `치지직 데이터 조회 실패: ${err.message}`,
     };
+  }
+}
+
+async function identifyChzzkGames(drops) {
+  const unknown = drops.filter(drop => rewardGame(drop) === 'unknown');
+  if (!unknown.length) return;
+  // Catalog IDs are official ER membership, not a match against campaign titles.
+  let catalog = [];
+  try { catalog = await fetchCampaignCatalog(); } catch { /* Preserve unclassified rewards; do not assume ER. */ }
+  const eternalCampaigns = new Set(catalog.map(c => c.id));
+  for (const drop of unknown) if (drop.campaignId && eternalCampaigns.has(drop.campaignId)) drop.gameCategoryId = 'Black_Survival_Eternal_Return';
+  const remaining = unknown.filter(drop => rewardGame(drop) === 'unknown');
+  const ids = [...new Set([...remaining.map(drop => drop.campaignId).filter(id => /^\d+$/.test(id)),
+    ...(remaining.some(drop => !drop.campaignId) ? catalog.map(c => c.id) : [])])].slice(0, 16);
+  const details = [];
+  for (let offset = 0; offset < ids.length; offset += 4) {
+    await Promise.all(ids.slice(offset, offset + 4).map(async id => {
+      try {
+        const response = await fetchWithTimeout(`https://api.chzzk.naver.com/service/v2/drops/campaigns/${id}`,
+          { credentials: 'include', headers: CHZZK_HEADERS, cache: 'no-store' }, 3000);
+        if (!response.ok) return;
+        const json = await response.json(), detail = json.content;
+        if (json.code !== 200 || String(detail?.campaignNo) !== id || !detail.categoryId) return;
+        if (!Array.isArray(detail.rewardList)) return;
+        details.push({ id, category: detail.categoryId, rewards: new Set(detail.rewardList.map(reward => String(reward.rewardNo))) });
+      } catch { /* Failed classification does not invalidate the earned-reward inventory. */ }
+    }));
+  }
+  for (const drop of remaining) {
+    const matches = details.filter(detail => drop.campaignId ? detail.id === drop.campaignId : detail.rewards.has(String(drop.rewardNo)));
+    const categories = new Set(matches.map(detail => detail.category));
+    if (categories.size === 1) drop.gameCategoryId = matches[0].category;
   }
 }
 

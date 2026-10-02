@@ -145,6 +145,8 @@ export async function fetchSoopDrops() {
           platform: 'soop',
           platformName: 'SOOP',
           gameTitle: item.cateName || item.title || 'SOOP 드롭스',
+          officialGameName: item.cateName || null,
+          gameCategoryId: item.cateNo ?? item.cate_no ?? item.broad_cate_no ?? null,
           campaignName: item.title || '드롭스 보상',
           rewardName: item.itemName || '드롭스 리워드',
           rewardImageUrl: item.image || null,
