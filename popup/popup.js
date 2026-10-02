@@ -46,6 +46,7 @@ let currentTab = 'all', drops = [], log = {}, hiddenDrops = {}, statuses = {}, b
 const hideSelection = new Set();
 let refreshing = false, claiming = false, renderRevision = 0, lastBatchNotice = null;
 let toastTimer = null;
+let historyExpiryTimer = null;
 const create = (tag, className, text) => {
   const node = document.createElement(tag);
   node.className = className;
@@ -70,11 +71,26 @@ function active(drop) {
   return !log[drop.id] && drop.claimable && (expiry === null || expiry >= Date.now()) && (drop.platform !== 'soop' || !drop.recentDate || isRecentDate(drop.recentDate));
 }
 function filteredDrops() { return currentTab === 'all' ? drops : drops.filter(d => d.platform === currentTab); }
+function visibleHistory(now = Date.now()) {
+  return Object.values(log).filter(drop => {
+    const expiry = parseExpTimestamp(drop.expDate);
+    return expiry === null || expiry >= now;
+  });
+}
+function scheduleHistoryExpiry() {
+  clearTimeout(historyExpiryTimer);
+  const now = Date.now();
+  const upcoming = Object.values(log).map(drop => parseExpTimestamp(drop.expDate)).filter(expiry => expiry !== null && expiry >= now);
+  if (!upcoming.length) return;
+  const next = upcoming.reduce((earliest, expiry) => Math.min(earliest, expiry), Infinity);
+  historyExpiryTimer = setTimeout(() => { render(); scheduleHistoryExpiry(); }, Math.min(next - now + 1, 2147483647));
+}
 async function loadState() {
   const revision = ++renderRevision;
   const [cached, handled, state, hidden] = await Promise.all([getCachedDrops(), getHandledDropsLog(), chrome.storage.local.get('batchJob'), getHiddenDrops()]);
   if (revision !== renderRevision) return;
   log = handled;
+  scheduleHistoryExpiry();
   hiddenDrops = hidden;
   drops = cached.drops.filter(drop => active(drop) && isRewardVisible(drop, hidden));
   statuses = cached.platformStatuses;
@@ -116,7 +132,8 @@ function render() {
   for (const [id, platform] of [['badgeAll', null], ['badgeChzzk', 'chzzk'], ['badgeSoop', 'soop'], ['badgeTwitch', 'twitch']]) {
     el(id).textContent = platform ? drops.filter(d => d.platform === platform).length : drops.length;
   }
-  el('badgeLog').textContent = Object.keys(log).length;
+  const history = visibleHistory();
+  el('badgeLog').textContent = history.length;
   el('dropsListView').classList.toggle('hidden', ['log', 'settings'].includes(currentTab));
   el('logListView').classList.toggle('hidden', currentTab !== 'log');
   el('settingsView').classList.toggle('hidden', currentTab !== 'settings');
@@ -128,10 +145,9 @@ function render() {
   el('refreshIcon').classList.toggle('rotating', refreshing);
   renderAlerts();
   if (currentTab === 'log') {
-    const entries = Object.values(log);
-    el('logContainer').replaceChildren(...datedCards(entries, true));
-    el('logEmptyState').classList.toggle('hidden', entries.length > 0);
-    el('summaryText').textContent = `기록된 보상 ${entries.length}개`;
+    el('logContainer').replaceChildren(...datedCards(history, true));
+    el('logEmptyState').classList.toggle('hidden', history.length > 0);
+    el('summaryText').textContent = `기록된 보상 ${history.length}개`;
   } else if (currentTab === 'settings') {
     el('summaryText').textContent = '설정';
   } else {
