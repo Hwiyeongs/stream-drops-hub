@@ -1,4 +1,4 @@
-# Stream Drops Hub v1.5.31
+# Stream Drops Hub v1.5.32
 
 치지직·SOOP·트위치 드롭스를 확인하는 웨일·Chrome 확장프로그램입니다.
 

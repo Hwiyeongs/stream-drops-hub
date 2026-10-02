@@ -643,8 +643,8 @@ body {
 .settings-disclosure > :not(summary) { margin-top: 8px; }
 .settings-events { padding-left: 18px; }
 .settings-events li + li { margin-top: 6px; }
-#settingsView .quick-links { gap: 6px; }
-#settingsView .quick-link { padding: 7px 10px; }
+#settingsView .quick-links { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+#settingsView .quick-link { min-width: 0; padding: 7px 8px; justify-content: center; gap: 6px; white-space: nowrap; }
 #settingsView :is(button, input, select, summary, a):focus-visible { outline: 2px solid var(--accent-claim); outline-offset: 3px; }
 
 .setting-label {
