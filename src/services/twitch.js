@@ -237,14 +237,15 @@ export async function fetchTwitchDrops() {
   const inventory = await fetchTwitchInventory();
   if (inventory.error) return { loggedIn: inventory.loggedIn, drops: [], error: inventory.error };
   const campaigns = inventory.campaigns;
-  const now = new Date();
+  const now = Date.now();
   const drops = [];
 
   for (const campaign of campaigns) {
-    // Use explicit claim deadline when supplied; do not invent a 24-hour grace period.
-    const deadline = campaign.claimEndAt || campaign.endAt || null;
+    // Inventory may still offer earned rewards after the campaign stops awarding watch time.
+    // Only an explicit claim deadline can expire those pending rewards.
+    const deadline = campaign.claimEndAt || null;
     const expires = parseExpTimestamp(deadline);
-    if (expires !== null && expires < now.getTime()) continue;
+    if (expires !== null && expires < now) continue;
 
     const gameTitle = campaign.game?.displayName || '트위치 드롭스';
     const boxArt = campaign.game?.boxArtURL
@@ -293,6 +294,8 @@ export async function fetchTwitchDrops() {
         claimable: true,
         dropInstanceId: selfContext.dropInstanceID || null,
         campaignUrl: 'https://www.twitch.tv/drops/inventory',
+        campaignEndAt: campaign.endAt || null,
+        claimEndAt: deadline,
         expDate: deadline,
       });
     }

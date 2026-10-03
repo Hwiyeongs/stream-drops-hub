@@ -1,13 +1,13 @@
 import { fetchTwitchDrops, claimTwitchDrop } from './twitch.js';
 import { fetchChzzkDrops, claimChzzkDrop, fetchChzzkCouponCode } from './chzzk.js';
 import { fetchSoopDrops, claimSoopDrop } from './soop.js';
-import { saveCachedDrops, getCachedDrops, getHandledDropsLog, recordHandledDrop, parseExpTimestamp, isRecentDate, getHiddenDrops } from './storage.js';
+import { saveCachedDrops, getCachedDrops, getHandledDropsLog, recordHandledDrop, parseDropClaimExpiry, isRecentDate, getHiddenDrops } from './storage.js';
 import { isRewardVisible } from './reward-visibility.js';
 import { appendCollectorEvent } from './collector-diagnostics.js';
 
 export function isActiveDrop(drop, handled = {}, now = Date.now()) {
   if (!drop?.claimable || handled[drop.id]) return false;
-  const expiry = parseExpTimestamp(drop.expDate);
+  const expiry = parseDropClaimExpiry(drop);
   if (expiry !== null && expiry < now) return false;
   if (drop.platform === 'soop' && drop.recentDate && !isRecentDate(drop.recentDate, now)) return false;
   return true;

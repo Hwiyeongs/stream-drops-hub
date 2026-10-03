@@ -223,7 +223,7 @@ test('Twitch refreshes captured page headers after an integrity rejection and re
   assert.equal(gqlCalls, 2);
   assert.deepEqual(mutations, ['instance-B']);
 });
-test('Twitch needs exact completed watch duration and uses same expiry in popup', async () => {
+test('Twitch needs exact completed watch duration and retains pending drops after campaign end', async () => {
   campaigns = [campaign()];
   campaigns[0].timeBasedDrops[0].self.currentMinutesWatched = 59.9;
   assert.equal((await fetchTwitchDrops()).drops.length, 0);
@@ -231,7 +231,11 @@ test('Twitch needs exact completed watch duration and uses same expiry in popup'
   const drop = (await fetchTwitchDrops()).drops[0];
   assert.equal(drop.id, 'twitch_instance-B'); assert.equal(isActiveDrop(drop), true);
   campaigns[0].endAt = '2020-01-01T00:00:00Z';
-  assert.equal((await fetchTwitchDrops()).drops.length, 0);
+  const [endedDrop] = (await fetchTwitchDrops()).drops;
+  assert.equal(endedDrop.id, drop.id);
+  assert.equal(endedDrop.campaignEndAt, campaigns[0].endAt);
+  assert.equal(endedDrop.claimEndAt, null); assert.equal(endedDrop.expDate, null);
+  assert.equal(isActiveDrop(endedDrop), true);
 });
 test('auto claim retries after transient failure and logs confirmed success', async () => {
   data.settings = { autoClaim: true, enableNotifications: false, pollingIntervalMinutes: 5, eternalReturnOnly: false };
@@ -578,4 +582,66 @@ test('batch claiming skips newly hidden rewards but includes other games despite
  await worker.processBatch();
  assert.equal(data.batchJob.successCount,2);assert.equal(data.batchJob.errors.length,1);
  assert.equal(data['handled:chzzk_1'].couponCode,'A');assert.equal(data['handled:chzzk_2'].couponCode,'B');assert.equal(data['handled:chzzk_3'],undefined);
+});
+
+test('ended Twitch campaign retains all six pending instances through aggregation and manual claim', async () => {
+  campaigns = [{ ...campaign(), name: 'ERM S12 P3 DAY1', status: 'EXPIRED', endAt: '2020-01-01T00:00:00Z',
+    timeBasedDrops: Array.from({ length: 6 }, (_, i) => ({ id: 'tier-' + i,
+      name: i % 2 ? 'ESPORTS PIECE2' : 'Drops Token', requiredMinutesWatched: 60,
+      self: { currentMinutesWatched: 60, isClaimed: false, dropInstanceID: 'ended-' + i } })) }];
+  const result = await fetchAllDrops();
+  assert.equal(result.drops.length, 6); assert.equal(result.totalCount, 6); assert.equal(result.claimableCount, 6);
+  await worker.handleMessage({ type: 'CLAIM_DROP', id: 'twitch_ended-0' });
+  assert.deepEqual(mutations, ['ended-0']);
+  assert.equal(data['handled:twitch_ended-0'].actionType, 'claimed');
+  assert.equal((await storage.getCachedDrops()).drops.length, 5);
+  const refreshed = await fetchAllDrops();
+  assert.equal(refreshed.drops.length, 5);
+  assert.equal(refreshed.drops.some(drop => drop.id === 'twitch_ended-0'), false);
+});
+
+test('ended Twitch campaigns still exclude claimed, incomplete, and unidentified rewards', async () => {
+  campaigns = [{ ...campaign(), endAt: '2020-01-01T00:00:00Z', timeBasedDrops: [
+    { ...campaign().timeBasedDrops[0], self: { currentMinutesWatched: 60, isClaimed: true, dropInstanceID: 'claimed' } },
+    { ...campaign().timeBasedDrops[0], self: { currentMinutesWatched: 59.9, isClaimed: false, dropInstanceID: 'incomplete' } },
+    { ...campaign().timeBasedDrops[0], self: { currentMinutesWatched: 60, isClaimed: false } },
+  ] }];
+  assert.equal((await fetchAllDrops()).drops.length, 0);
+  assert.equal(mutations.length, 0);
+});
+
+test('only explicit Twitch claim deadlines expire pending rewards; coupon expiry remains enforced', async () => {
+  campaigns = [{ ...campaign(), endAt: '2020-01-01T00:00:00Z', claimEndAt: '2099-01-01T00:00:00Z' }];
+  const [drop] = (await fetchTwitchDrops()).drops;
+  assert.equal(drop.expDate, campaigns[0].claimEndAt);
+  assert.equal(isActiveDrop(drop), true);
+  assert.equal(isActiveDrop({ ...drop, claimEndAt: '2020-01-01T00:00:00Z' }), false);
+  campaigns[0].claimEndAt = '2020-01-01T00:00:00Z';
+  assert.equal((await fetchTwitchDrops()).drops.length, 0);
+  assert.equal(isActiveDrop({ ...coupon('expired-chzzk'), expDate: '2020-01-01' }), false);
+  assert.equal(isActiveDrop({ ...coupon('expired-soop'), platform: 'soop', expDate: '2020-01-01' }), false);
+});
+
+test('legacy Twitch cache campaign expiry cannot block claims; stale, hidden, and handled safeguards remain', async () => {
+  campaigns = [campaign()];
+  const [drop] = (await fetchTwitchDrops()).drops;
+  const { claimEndAt, ...legacy } = { ...drop, expDate: '2020-01-01T00:00:00Z' };
+  assert.equal(storage.parseDropClaimExpiry(legacy), null);
+  assert.equal(isActiveDrop(legacy), true);
+  assert.equal(isActiveDrop(legacy, { [legacy.id]: {} }), false);
+  await assert.rejects(claimUnifiedDrop({ ...legacy, stale: true }), /最新|최신/);
+  await storage.hideDrop(legacy);
+  await assert.rejects(claimUnifiedDrop(legacy), /숨긴/);
+  await storage.restoreDrop(legacy.id);
+  await storage.saveCachedDrops([legacy], {});
+  assert.equal((await claimUnifiedDrop(legacy)).success, true);
+  assert.deepEqual(mutations, ['instance-B']);
+});
+
+test('automatic Twitch claim processes earned unclaimed rewards after campaign end', async () => {
+  data.settings = { autoClaim: true, enableNotifications: false };
+  campaigns = [{ ...campaign(), endAt: '2020-01-01T00:00:00Z' }];
+  await worker.pollDrops();
+  assert.deepEqual(mutations, ['instance-B']);
+  assert.equal(data['handled:twitch_instance-B'].actionType, 'claimed');
 });

@@ -1,7 +1,7 @@
 import { campaignDisplayDate } from '../src/services/campaign-date.js';
 import { dropsDay } from '../src/services/drops-day.js';
 import { request, fetchAllDrops, claimUnifiedDrop, saveSettings, recordHandledDrop } from '../src/services/client.js';
-import { getCachedDrops, getHandledDropsLog, getSettings, getHiddenDrops, parseExpTimestamp, parseTimestamp, isRecentDate } from '../src/services/storage.js';
+import { getCachedDrops, getHandledDropsLog, getSettings, getHiddenDrops, parseExpTimestamp, parseDropClaimExpiry, parseTimestamp, isRecentDate } from '../src/services/storage.js';
 import { isRewardVisible } from '../src/services/reward-visibility.js';
 import { getCollectorEvents, REASON_LABELS } from '../src/services/collector-diagnostics.js';
 
@@ -67,7 +67,7 @@ function toast(message, type = 'info') {
 }
 function busy() { return claiming || batchJob?.status === 'running'; }
 function active(drop) {
-  const expiry = parseExpTimestamp(drop.expDate);
+  const expiry = parseDropClaimExpiry(drop);
   return !log[drop.id] && drop.claimable && (expiry === null || expiry >= Date.now()) && (drop.platform !== 'soop' || !drop.recentDate || isRecentDate(drop.recentDate));
 }
 function filteredDrops() { return currentTab === 'all' ? drops : drops.filter(d => d.platform === currentTab); }

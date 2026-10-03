@@ -84,6 +84,10 @@ export function parseTimestamp(value, endOfDay = false) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 export function parseExpTimestamp(value) { return parseTimestamp(value, true); }
+/** Twitch campaign end is a watch cutoff, not a claim deadline. Old expDate caches used that cutoff. */
+export function parseDropClaimExpiry(drop) {
+  return parseExpTimestamp(drop?.platform === 'twitch' ? drop.claimEndAt : drop?.expDate);
+}
 export function yesterdayStart(now = Date.now()) { return Math.floor((now + KST) / DAY) * DAY - KST - DAY; }
 export function isRecentDate(value, now = Date.now()) {
   const time = parseTimestamp(value);
