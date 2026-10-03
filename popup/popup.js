@@ -228,6 +228,13 @@ async function restoreReward(drop) {
   finally { claiming = false; await loadState(); }
 }
 function updateHidePickerControls() {
+  const items = filteredDrops();
+  const selectedCount = items.filter(drop => hideSelection.has(drop.id)).length;
+  const selectAll = el('hideRewardsSelectAll');
+  selectAll.checked = items.length > 0 && selectedCount === items.length;
+  selectAll.indeterminate = selectedCount > 0 && selectedCount < items.length;
+  selectAll.disabled = busy() || !items.length;
+  el('hideRewardsSelectionCount').textContent = `선택 ${selectedCount}/${items.length}개`;
   el('hideRewardsConfirm').disabled = busy() || !hideSelection.size;
   el('hideRewardsConfirm').textContent = claiming ? '숨기는 중…' : `숨기기${hideSelection.size ? ' (' + hideSelection.size + ')' : ''}`;
   el('hideRewardsCancel').disabled = busy();
@@ -353,6 +360,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('rewardMenuBtn').addEventListener('click', () => {
     if (busy() || refreshing) return;
     hideSelection.clear(); el('hideRewardsError').classList.add('hidden'); renderHidePicker(); el('hideRewardsDialog').showModal();
+  });
+  el('hideRewardsSelectAll').addEventListener('change', () => {
+    if (busy()) return;
+    if (el('hideRewardsSelectAll').checked) {
+      for (const drop of filteredDrops()) hideSelection.add(drop.id);
+    } else hideSelection.clear();
+    renderHidePicker();
   });
   el('hideRewardsCancel').addEventListener('click', () => el('hideRewardsDialog').close());
   el('hideRewardsConfirm').addEventListener('click', hideSelectedRewards);
