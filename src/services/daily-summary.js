@@ -1,4 +1,5 @@
 import { dropsDay } from './drops-day.js';
+import { acquisitionRecords } from './reward-acquisition.js';
 import { getCachedDrops, getHandledDropsLog, getHiddenDrops, parseTimestamp } from './storage.js';
 import { isActiveDrop } from './aggregator.js';
 import { isRewardVisible } from './reward-visibility.js';
@@ -8,7 +9,7 @@ const validTime = (value, now) => Number.isFinite(value) && value > 0 && value <
 const unique = entries => [...new Map(entries.map(entry => [entry.platform === 'twitch' && entry.dropInstanceId ?
   'twitch:' + (entry.twitchUserId || '') + ':' + entry.dropInstanceId : entry.id, entry])).values()];
 /** Counts confirmed facts only; campaign dates are never acquisition timestamps. */
-export function buildDailySummary({ cached = {}, handled = {}, hidden = {}, accounts = {}, lastSuccess = {}, collectorState = {}, now = Date.now() } = {}) {
+export function buildDailySummary({ cached = {}, handled = {}, hidden = {}, accounts = {}, lastSuccess = {}, collectorState = {}, acquisitions = [], now = Date.now() } = {}) {
   const day = dropsDay(now);
   const today = value => { const at = parseTimestamp(value); return at !== null && at <= now && dropsDay(at) === day; };
   const twitchStatus = cached.platformStatuses?.twitch;
@@ -24,13 +25,23 @@ export function buildDailySummary({ cached = {}, handled = {}, hidden = {}, acco
     const status = cached.platformStatuses?.[platform];
     const state = !status ? 'unknown' : status.loggedIn === false ? 'login' : status.error || status.stale ? 'stale' : status.loggedIn === true ? 'ok' : 'unknown';
     const processed = unique(receipts.filter(entry => entry.platform === platform));
-    const acquired = unique([...(cached.drops || []).filter(entry => entry.platform === platform && isRewardVisible(entry, hidden)), ...processed]);
+    const candidates = [...processed, ...acquisitions, ...(cached.drops || [])].filter(entry => entry?.platform === platform &&
+      isRewardVisible(entry, hidden) && (platform !== 'twitch' || currentAccount && String(entry.twitchUserId || '') === String(currentAccount)));
+    const acquiredById = new Map();
+    for (const entry of candidates) {
+      const identity = platform === 'twitch' ? JSON.stringify([entry.twitchUserId, entry.campaignId || '', entry.timeBasedDropId || entry.dropInstanceId || entry.id]) : entry.id;
+      const previous = acquiredById.get(identity);
+      if (!previous || parseTimestamp(entry.acquiredAt) !== null) acquiredById.set(identity, entry);
+    }
+    const acquired = [...acquiredById.values()];
+    const earnedCount = acquired.filter(entry => today(entry.acquiredAt)).length;
+    const undated = acquired.some(entry => parseTimestamp(entry.acquiredAt) === null);
     const count = platform === 'twitch' ? currentAccount ? processed.filter(entry => entry.actionType === 'claimed' &&
       entry.twitchUserId && String(entry.twitchUserId) === String(currentAccount) && today(entry.claimedAt ??
         (entry.receiptIdentityVerified && !entry.claimStatus ? entry.receivedAt ?? entry.handledAt : null))).length : null :
       processed.filter(entry => ['saved', 'copied', 'claimed'].includes(entry.actionType) && today(entry.receivedAt ?? entry.handledAt)).length;
     platforms[platform] = {
-      earnedToday: platform === 'chzzk' ? acquired.filter(entry => today(entry.acquiredAt)).length : null,
+      earnedToday: platform === 'twitch' && !currentAccount || !earnedCount && undated ? null : earnedCount,
       processedToday: count,
       pending: unique(pending.filter(entry => entry.platform === platform)).length,
       state, lastSuccessAt: validTime(lastSuccess[platform], now) ?? (state === 'ok' ? validTime(cached.lastUpdated, now) : null),
@@ -39,8 +50,10 @@ export function buildDailySummary({ cached = {}, handled = {}, hidden = {}, acco
   return { day, resetHourKst: 5, generatedAt: now, platforms };
 }
 export async function getDailySummary(now = Date.now()) {
-  const [cached, handled, hidden, { inventoryAccounts = {}, inventoryLastSuccess = {}, collectorState = {} }] = await Promise.all([
-    getCachedDrops(), getHandledDropsLog(), getHiddenDrops(), chrome.storage.local.get(['inventoryAccounts', 'inventoryLastSuccess', 'collectorState']),
+  const [cached, handled, hidden, stored] = await Promise.all([
+    getCachedDrops(), getHandledDropsLog(), getHiddenDrops(), chrome.storage.local.get(null),
   ]);
-  return buildDailySummary({ cached, handled, hidden, accounts: inventoryAccounts, lastSuccess: inventoryLastSuccess, collectorState, now });
+  const { inventoryAccounts = {}, inventoryLastSuccess = {}, collectorState = {} } = stored;
+  return buildDailySummary({ cached, handled, hidden, accounts: inventoryAccounts, lastSuccess: inventoryLastSuccess,
+    collectorState, acquisitions: acquisitionRecords(stored), now });
 }

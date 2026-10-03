@@ -156,6 +156,7 @@ export async function fetchSoopDrops() {
           campaignUrl: SOOP_INVENTORY_URL,
           expDate: item.useExpDate || item.expDate || null,
           recentDate: itemDate === null ? null : new Date(itemDate).toISOString(),
+          acquiredAt: item.sendDate || item.regDate || item.registDate || item.createDate || item.date || null,
         });
       }
     }

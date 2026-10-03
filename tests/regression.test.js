@@ -472,7 +472,7 @@ test('Twitch inventory retains campaign display date separately from acquisition
  campaigns=[{...campaign(),name:'MID SEASON DROPS [0917]',endAt:'2099-09-18T04:59:00+09:00'}];
  const result=await fetchTwitchDrops();
  assert.equal(result.drops[0].campaignDate,'2099-09-17');
- assert.equal(result.drops[0].acquiredAt,undefined);
+ assert.equal(result.drops[0].acquiredAt,null);
 });
 
 
@@ -678,4 +678,34 @@ test('collector failure alerts run after real failed collection cycles and alert
     now += 60000; await checkCollector();
     assert.equal(data.collectorState.chzzk.checkedAt, now); assert.equal(notifications.length, 1);
   } finally { Date.now = originalNow; chrome.storage.local.set = originalSet; }
+});
+test('Twitch inventory tracks earning before claim and preserves the acquisition date on later claim', async () => {
+  const originalNow = Date.now; let now = Date.parse('2026-10-03T05:10:00+09:00'); Date.now = () => now;
+  try {
+    campaigns = [campaign()]; campaigns[0].timeBasedDrops[0].self.currentMinutesWatched = 59;
+    assert.equal((await fetchTwitchDrops()).drops.length, 0);
+    now += 60000; campaigns[0].timeBasedDrops[0].self.currentMinutesWatched = 60;
+    const earned = (await fetchTwitchDrops()).drops[0]; assert.equal(earned.acquiredAt, now);
+    await storage.saveCachedDrops([earned], { twitch: { loggedIn: true } }); data.inventoryAccounts = { twitch: 'user-1' };
+    assert.equal((await worker.handleMessage({ type: 'GET_DAILY_SUMMARY' })).platforms.twitch.earnedToday, 1);
+    now += 86400000; sessionData.twitchGqlHeaders.at = now; await claimUnifiedDrop(earned);
+    assert.equal(data['handled:' + earned.id].acquiredAt, now - 86400000);
+    assert.equal((await worker.handleMessage({ type: 'GET_DAILY_SUMMARY' })).platforms.twitch.earnedToday, 0);
+  } finally { Date.now = originalNow; }
+});
+test('SOOP acquisition uses server reward date instead of the bracket date in its title', async () => {
+  const now = Date.now(); const serverDate = new Date(now - 60000).toISOString();
+  const day = new Date(now + 9 * 3600000).toISOString().slice(5, 10).replace('-', '/');
+  soopAvailable = [{ itemCodeIdx: 123, itemName: '[' + day + '] Reward', regDate: serverDate, useExpDate: '2099-01-01' }];
+  const result = await fetchSoopDrops(); assert.equal(result.drops[0].acquiredAt, serverDate);
+  assert.notEqual(result.drops[0].recentDate, result.drops[0].acquiredAt);
+});
+test('failure to persist acquisition observations cannot fail Twitch inventory queries or collection', async () => {
+  const originalSet = chrome.storage.local.set;
+  chrome.storage.local.set = async values => {
+    if (Object.keys(values).some(key => key.startsWith('earned:twitch:'))) throw Error('quota');
+    return originalSet(values);
+  };
+  try { campaigns = [campaign()]; const result = await fetchTwitchDrops(); assert.equal(result.error, null); assert.equal(result.drops.length, 1); }
+  finally { chrome.storage.local.set = originalSet; }
 });

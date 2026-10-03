@@ -1,4 +1,5 @@
 import { twitchDisplayDate } from './campaign-date.js';
+import { observeTwitchAcquisitions } from './reward-acquisition.js';
 /**
  * Twitch Drops Integration Service (Pending Claims Only)
  * Official Inventory Web: https://www.twitch.tv/drops/inventory
@@ -228,7 +229,10 @@ export async function fetchTwitchInventory() {
   const envelope = Array.isArray(json) ? json[0] : json;
   const viewer = envelope?.data?.currentUser;
   if (!viewer?.id) return { loggedIn: null, drops: [], error: '트위치 보관함의 조회 계정을 확인하지 못했습니다. 다시 조회해 주세요.' };
-  return { loggedIn: true, campaigns: decoded.campaigns, error: null,
+  let observedCampaigns = decoded.campaigns;
+  try { observedCampaigns = await observeTwitchAcquisitions(decoded.campaigns, String(viewer.id)); }
+  catch (error) { console.warn('[Twitch] Acquisition tracking unavailable'); }
+  return { loggedIn: true, campaigns: observedCampaigns, error: null,
     twitchUserId: viewer?.id == null ? null : String(viewer.id),
     twitchUserLogin: typeof viewer?.login === 'string' ? viewer.login.toLowerCase() : null };
 }
@@ -293,6 +297,8 @@ export async function fetchTwitchDrops() {
         status: 'CLAIMABLE',
         claimable: true,
         dropInstanceId: selfContext.dropInstanceID || null,
+        acquiredAt: timeDrop.acquiredAt || null,
+        acquisitionSource: timeDrop.acquisitionSource || null,
         campaignUrl: 'https://www.twitch.tv/drops/inventory',
         campaignEndAt: campaign.endAt || null,
         claimEndAt: deadline,

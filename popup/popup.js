@@ -349,7 +349,7 @@ async function renderDailySummary() {
   const table = create('table', 'daily-summary-table');
   const head = document.createElement('thead');
   const header = document.createElement('tr');
-  for (const label of ['플랫폼', '오늘 수령', '수령 대기']) {
+  for (const label of ['플랫폼', '오늘 획득', '수령 대기']) {
     const cell = create('th', '', label); cell.scope = 'col'; header.appendChild(cell);
   }
   head.appendChild(header); table.appendChild(head);
@@ -361,10 +361,10 @@ async function renderDailySummary() {
     name.appendChild(create('span', '', { chzzk: '치지직', soop: 'SOOP', twitch: '트위치' }[platform]));
     const status = { login: '로그인 필요', stale: '이전 조회 기준', unknown: '확인 전' }[value.state];
     if (status) name.appendChild(create('span', 'daily-summary-status', status));
-    const received = create('td', 'daily-summary-count', value.processedToday === null ? '미확인' : value.processedToday + '개');
+    const earned = create('td', 'daily-summary-count', value.earnedToday === null ? '미확인' : value.earnedToday + '개');
     const pending = create('td', 'daily-summary-count', ['unknown', 'login'].includes(value.state) ? '미확인' : value.pending + '개');
     if (value.state === 'stale') pending.classList.add('daily-summary-stale');
-    row.append(name, received, pending); body.appendChild(row);
+    row.append(name, earned, pending); body.appendChild(row);
   }
   table.appendChild(body);
   el('dailySummaryContent').replaceChildren(table);
@@ -471,7 +471,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (area !== 'local') return;
     if (Object.keys(changes).some(k => k === 'dropsCache' || k === 'platformStatuses' || k === 'batchJob' || k.startsWith('handled:') || k.startsWith('hidden:'))) void loadState().catch(console.error);
     if (changes.collectorState || changes.collectorCatalog) void renderCollector().catch(console.error);
-    if (Object.keys(changes).some(k => ['dropsCache', 'platformStatuses', 'inventoryLastSuccess', 'inventoryAccounts', 'collectorState'].includes(k) || k.startsWith('handled:') || k.startsWith('hidden:'))) void renderDailySummary().catch(console.error);
+    if (Object.keys(changes).some(k => ['dropsCache', 'platformStatuses', 'inventoryLastSuccess', 'inventoryAccounts', 'collectorState'].includes(k) || k.startsWith('handled:') || k.startsWith('hidden:') || k.startsWith('earned:twitch:'))) void renderDailySummary().catch(console.error);
     if (changes.collectorEvents && el('collectorRecentDetails').open) void renderCollectorEvents().catch(console.error);
     if (changes.liveMonitorState) void renderLiveStatus().catch(console.error);
     if (changes.settings) { void loadSettings().catch(console.error); void loadState().catch(console.error); }

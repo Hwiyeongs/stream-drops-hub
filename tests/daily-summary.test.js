@@ -34,7 +34,7 @@ test('unknown acquisition times never use a campaign date or first discovery as 
     drop('chzzk_unknown', 'chzzk', { acquiredAt: null, campaignDate: afterReset }),
     drop('soop_unknown', 'soop', { recentDate: afterReset }), drop('twitch_unknown', 'twitch', { campaignDate: afterReset }),
   ]) });
-  assert.equal(summary.platforms.chzzk.earnedToday, 0); assert.equal(summary.platforms.soop.earnedToday, null);
+  assert.equal(summary.platforms.chzzk.earnedToday, null); assert.equal(summary.platforms.soop.earnedToday, 1);
   assert.equal(summary.platforms.twitch.earnedToday, null); assert.equal(summary.platforms.twitch.processedToday, null);
 });
 test('hidden, handled and expired rewards are excluded from waiting; pending earned Twitch drops survive campaign end', () => {
@@ -64,4 +64,32 @@ test('summary reports counts and timestamps only, without account IDs, coupon co
     (Array.isArray(keys) ? keys : [keys]).map(key => [key, structuredClone(values[key])]) ); } } } };
   const summary = await getDailySummary(now);
   assert.equal(/PRIVATE/.test(JSON.stringify(summary)), false); assert.equal(summary.platforms.chzzk.processedToday, 1);
+});
+test('earning today includes unclaimed rewards and ignores later claim or code-copy dates on every platform', () => {
+  const input = { now, accounts: { twitch: 'viewer' }, cached: cached([
+    drop('new', 'chzzk'), drop('soop_today', 'soop'),
+    drop('twitch_today', 'twitch', { twitchUserId: 'viewer', campaignId: 'c', timeBasedDropId: 'd', dropInstanceId: 'today' }),
+  ]), handled: {
+    oldChzzk: { ...drop('oldChzzk'), acquiredAt: beforeReset, receivedAt: now, actionType: 'copied' },
+    oldSoop: { ...drop('oldSoop', 'soop'), acquiredAt: beforeReset, receivedAt: now, actionType: 'saved' },
+    oldTwitch: { ...drop('oldTwitch', 'twitch'), acquiredAt: beforeReset, claimedAt: now, twitchUserId: 'viewer', actionType: 'claimed' },
+  } };
+  const summary = buildDailySummary(input);
+  for (const platform of ['chzzk', 'soop', 'twitch']) assert.equal(summary.platforms[platform].earnedToday, 1);
+  const acquired = input.cached.drops[0];
+  input.handled.new = { ...acquired, actionType: 'saved', receivedAt: now }; input.cached.drops.shift();
+  assert.equal(buildDailySummary(input).platforms.chzzk.earnedToday, 1);
+});
+test('SOOP reward title and recentDate never replace a missing acquisition timestamp', () => {
+  const summary = buildDailySummary({ now, cached: cached([drop('soop_unknown', 'soop', { acquiredAt: null, recentDate: afterReset, campaignDate: afterReset })]) });
+  assert.equal(summary.platforms.soop.earnedToday, null);
+});
+test('Twitch progress acquisition records survive claims and account changes without counting other accounts or hidden rewards', () => {
+  const acquired = drop('twitch_today', 'twitch', { twitchUserId: 'viewer', campaignId: 'c', timeBasedDropId: 'd', dropInstanceId: 'today' });
+  const summary = buildDailySummary({ now, accounts: { twitch: 'viewer' }, cached: cached([acquired]), acquisitions: [
+    acquired, { ...acquired, id: 'twitch_other', twitchUserId: 'other', dropInstanceId: 'other' },
+    { ...acquired, id: 'twitch_hidden', timeBasedDropId: 'hidden', dropInstanceId: 'hidden' },
+  ], hidden: { twitch_hidden: {} }, handled: { receipt: { ...acquired, acquiredAt: null, claimedAt: now, actionType: 'claimed' } } });
+  assert.equal(summary.platforms.twitch.earnedToday, 1);
+  assert.equal(buildDailySummary({ now, accounts: { twitch: 'new' }, cached: cached([]), acquisitions: [acquired] }).platforms.twitch.earnedToday, 0);
 });
