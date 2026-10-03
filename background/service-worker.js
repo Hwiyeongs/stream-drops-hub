@@ -8,7 +8,6 @@ import { isRewardVisible } from '../src/services/reward-visibility.js';
 import { getCollectorStatusReport, appendCollectorEvent } from '../src/services/collector-diagnostics.js';
 
 import { getDailySummary } from '../src/services/daily-summary.js';
-import { createSettingsBackup, restoreSettingsBackup } from '../src/services/settings-backup.js';
 
 registerTwitchHeaderCapture();
 
@@ -125,15 +124,6 @@ async function applyRuntimeSettings(settings) {
   if (settings.liveMonitorEnabled) void checkLiveMonitor().catch(console.error);
   runCollector(true);
 }
-function importSettingsBackup(value) {
-  const task = settingsTail.then(async () => {
-    const result = await restoreSettingsBackup(value);
-    await applyRuntimeSettings(result.settings);
-    return { settingsCount: result.settingsCount, hiddenAdded: result.hiddenAdded, hiddenTotal: result.hiddenTotal };
-  });
-  settingsTail = task.catch(() => {});
-  return task;
-}
 export async function handleMessage(message) {
   await initialize();
   switch (message.type) {
@@ -143,8 +133,6 @@ export async function handleMessage(message) {
       return catalog;
     }
     case 'GET_STATE': return { ...await getCachedDrops(), settings: await getSettings() };
-    case 'EXPORT_SETTINGS_BACKUP': return createSettingsBackup();
-    case 'IMPORT_SETTINGS_BACKUP': return importSettingsBackup(message.backup);
     case 'GET_DAILY_SUMMARY': return getDailySummary();
     case 'GET_TWITCH_STATUS_REPORT': return getTwitchStatusReport();
     case 'GET_COLLECTOR_STATUS_REPORT': return getCollectorStatusReport();

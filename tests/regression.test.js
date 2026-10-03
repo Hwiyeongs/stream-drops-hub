@@ -645,23 +645,6 @@ test('automatic Twitch claim processes earned unclaimed rewards after campaign e
   assert.deepEqual(mutations, ['instance-B']);
   assert.equal(data['handled:twitch_instance-B'].actionType, 'claimed');
 });
-test('backup and restore worker messages apply runtime settings and preserve receipt/coupon history', async () => {
-  data.settings = { autoCollectChzzk: false, autoCollectTwitch: false, collectorFailureAlerts: true };
-  data['hidden:chzzk_1'] = { id: 'chzzk_1', platform: 'chzzk', rewardName: 'Keep' };
-  data['handled:old'] = { platform: 'chzzk', couponCode: 'KEEP', receivedAt: 123 };
-  data['coupon:old'] = 'KEEP';
-  const backup = await worker.handleMessage({ type: 'EXPORT_SETTINGS_BACKUP' });
-  assert.equal(backup.settings.collectorFailureAlerts, true); assert.equal(backup.hiddenRewards.length, 1);
-  backup.settings.pollingIntervalMinutes = 5;
-  backup.hiddenRewards.push({ id: 'soop_2', platform: 'soop' });
-  const result = await worker.handleMessage({ type: 'IMPORT_SETTINGS_BACKUP', backup });
-  assert.equal(result.hiddenAdded, 1); assert.equal(result.settingsCount, 9);
-  assert.equal(alarms.get('checkDropsAlarm').periodInMinutes, 5);
-  assert.equal(data['handled:old'].couponCode, 'KEEP'); assert.equal(data['coupon:old'], 'KEEP');
-  assert.equal(data['hidden:chzzk_1'].rewardName, 'Keep');
-  await assert.rejects(worker.handleMessage({ type: 'IMPORT_SETTINGS_BACKUP', backup: { ...backup, schemaVersion: 2 } }));
-  assert.equal(data.settings.pollingIntervalMinutes, 5);
-});
 test('successful inventory timestamps and verified Twitch account feed daily summary and survive failed reads', async () => {
   campaigns = [campaign()]; await fetchAllDrops();
   const successfulAt = data.inventoryLastSuccess.twitch;

@@ -8,13 +8,11 @@ export async function getSettings() {
   delete result.eternalReturnOnly;
   return result;
 }
-export const SETTINGS_KEYS = Object.freeze(Object.keys(DEFAULT_SETTINGS));
-export function validateSettingsValues(values, strict = false) {
+function validateSettingsValues(values) {
   if (!values || typeof values !== 'object' || Array.isArray(values)) throw new Error('설정 값이 올바르지 않습니다.');
   const result = {};
   for (const [key, value] of Object.entries(values)) {
     if (!Object.hasOwn(DEFAULT_SETTINGS, key)) {
-      if (strict) throw new Error('지원하지 않는 설정 항목이 있습니다.');
       continue;
     }
     if (key === 'pollingIntervalMinutes') {

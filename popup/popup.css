@@ -841,7 +841,12 @@ body {
 .reward-picker-actions .btn-claim:hover { transform: none; }
 .reward-picker :is(button, input):focus-visible { outline: 2px solid var(--accent-claim); outline-offset: 3px; }
 
-.daily-summary-list { display: flex; flex-direction: column; gap: 8px; }
-.daily-summary-row .setting-desc + .setting-desc { margin-top: 2px; color: var(--text-muted); }
-.backup-status { white-space: pre-line; overflow-wrap: anywhere; }
-#applySettingsBackup { margin: 8px 0 0; width: 100%; }
+.daily-summary-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; }
+.daily-summary-table :is(th, td) { padding: 7px 4px; text-align: right; vertical-align: middle; }
+.daily-summary-table thead th { color: var(--text-muted); font-size: 11px; font-weight: 500; border-bottom: 1px solid var(--border-color); }
+.daily-summary-table th:first-child { width: 40%; text-align: left; }
+.daily-summary-table tbody th { font-weight: 600; }
+.daily-summary-table tbody tr + tr { border-top: 1px solid var(--border-color); }
+.daily-summary-count { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.daily-summary-status { display: block; margin-top: 2px; color: var(--text-muted); font-size: 10px; font-weight: 400; }
+.daily-summary-stale { color: var(--text-muted); }
