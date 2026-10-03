@@ -1,4 +1,5 @@
 import { campaignDisplayDate } from '../src/services/campaign-date.js';
+import { parseSettingsBackup, BACKUP_MAX_BYTES } from '../src/services/settings-backup.js';
 import { dropsDay } from '../src/services/drops-day.js';
 import { request, fetchAllDrops, claimUnifiedDrop, saveSettings, recordHandledDrop } from '../src/services/client.js';
 import { getCachedDrops, getHandledDropsLog, getSettings, getHiddenDrops, parseExpTimestamp, parseDropClaimExpiry, parseTimestamp, isRecentDate } from '../src/services/storage.js';
@@ -7,7 +8,8 @@ import { getCollectorEvents, REASON_LABELS } from '../src/services/collector-dia
 
 const el = id => document.getElementById(id);
 let settingsBusy = true;
-const settingKeys = { settingNotify: 'enableNotifications', settingAutoClaim: 'autoClaim', settingInterval: 'pollingIntervalMinutes', settingLiveMonitor: 'liveMonitorEnabled', settingLiveAutoOpen: 'liveAutoOpen', settingCollectChzzk: 'autoCollectChzzk', settingCollectTwitch: 'autoCollectTwitch', settingCollectCampaign: 'chzzkCollectCampaign' };
+let backupBusy = false, pendingBackup = null;
+const settingKeys = { settingNotify: 'enableNotifications', settingAutoClaim: 'autoClaim', settingInterval: 'pollingIntervalMinutes', settingLiveMonitor: 'liveMonitorEnabled', settingLiveAutoOpen: 'liveAutoOpen', settingCollectChzzk: 'autoCollectChzzk', settingCollectTwitch: 'autoCollectTwitch', settingCollectCampaign: 'chzzkCollectCampaign', settingCollectorAlerts: 'collectorFailureAlerts' };
 const settingIds = Object.keys(settingKeys);
 async function renderLiveStatus() {
   const [{ liveMonitorState: state }, settings] = await Promise.all([chrome.storage.local.get('liveMonitorState'), getSettings()]);
@@ -41,12 +43,14 @@ async function renderCollector() {
 function enableSettingControls() {
   settingIds.map(el).forEach(c => { c.disabled = settingsBusy; });
   el('settingLiveAutoOpen').disabled = settingsBusy || !el('settingLiveMonitor').checked;
+  updateBackupControls();
 }
 let currentTab = 'all', drops = [], log = {}, hiddenDrops = {}, statuses = {}, batchJob = null;
 const hideSelection = new Set();
 let refreshing = false, claiming = false, renderRevision = 0, lastBatchNotice = null;
 let toastTimer = null;
 let historyExpiryTimer = null;
+let dailySummaryTimer = null, dailySummaryRevision = 0;
 const create = (tag, className, text) => {
   const node = document.createElement(tag);
   node.className = className;
@@ -127,6 +131,7 @@ function datedCards(items, history) {
     return nodes;
 }
 function render() {
+  updateBackupControls();
   el('rewardMenuBtn').classList.toggle('hidden', ['log', 'settings'].includes(currentTab));
   el('rewardMenuBtn').disabled = busy() || refreshing || !filteredDrops().length;
   for (const [id, platform] of [['badgeAll', null], ['badgeChzzk', 'chzzk'], ['badgeSoop', 'soop'], ['badgeTwitch', 'twitch']]) {
@@ -340,6 +345,84 @@ async function renderCollectorEvents() {
     list.appendChild(create('li', '', `${at} · ${platform} · ${event.message}${event.campaign ? ' · ' + event.campaign : ''}${event.reason ? ' (' + REASON_LABELS[event.reason] + ')' : ''}`));
   }
 }
+function updateBackupControls() {
+  const disabled = settingsBusy || backupBusy || busy() || refreshing;
+  el('exportSettingsBackup').disabled = disabled;
+  el('chooseSettingsBackup').disabled = disabled;
+  el('settingsBackupFile').disabled = disabled;
+  el('applySettingsBackup').disabled = disabled || !pendingBackup;
+  el('applySettingsBackup').classList.toggle('hidden', !pendingBackup);
+}
+async function exportSettingsBackup() {
+  if (settingsBusy || backupBusy || busy() || refreshing) return;
+  backupBusy = true; updateBackupControls();
+  try {
+    const backup = await request('EXPORT_SETTINGS_BACKUP');
+    const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a'); link.href = url;
+    link.download = 'stream-drops-hub-settings-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    el('settingsBackupStatus').textContent = '설정과 숨김 목록 백업 파일을 저장했습니다.';
+  } catch (error) { el('settingsBackupStatus').textContent = error.message; }
+  finally { backupBusy = false; updateBackupControls(); }
+}
+async function readSettingsBackupFile() {
+  const file = el('settingsBackupFile').files[0];
+  pendingBackup = null;
+  if (!file) { updateBackupControls(); return; }
+  backupBusy = true; updateBackupControls();
+  try {
+    if (file.size > BACKUP_MAX_BYTES) throw new Error('백업 파일은 1MB 이하만 사용할 수 있습니다.');
+    pendingBackup = parseSettingsBackup(await file.text());
+    const flags = pendingBackup.settings;
+    el('settingsBackupStatus').textContent = `파일 확인: 설정 ${Object.keys(flags).length}개 · 숨김 ${pendingBackup.hiddenRewards.length}개\n` +
+      `자동 수집: 치지직 ${flags.autoCollectChzzk === undefined ? '현재 설정 유지' : flags.autoCollectChzzk ? '켜짐' : '꺼짐'} · 트위치 ${flags.autoCollectTwitch === undefined ? '현재 설정 유지' : flags.autoCollectTwitch ? '켜짐' : '꺼짐'}\n` +
+      '적용하면 옵션을 복원하고 기존 숨김 목록에 합칩니다.';
+  } catch (error) { el('settingsBackupStatus').textContent = error.message; }
+  finally { backupBusy = false; updateBackupControls(); }
+}
+async function applySettingsBackup() {
+  if (!pendingBackup || settingsBusy || backupBusy || busy() || refreshing) return;
+  backupBusy = true; settingsBusy = true; enableSettingControls();
+  try {
+    const result = await request('IMPORT_SETTINGS_BACKUP', { backup: pendingBackup });
+    pendingBackup = null; el('settingsBackupFile').value = '';
+    el('settingsBackupStatus').textContent = `설정 ${result.settingsCount}개 복원 · 숨김 ${result.hiddenAdded}개 추가 (전체 ${result.hiddenTotal}개)`;
+  } catch (error) { el('settingsBackupStatus').textContent = error.message; }
+  finally {
+    try { await Promise.all([loadSettings(), loadState()]); } catch (error) { toast(error.message, 'error'); }
+    finally { backupBusy = false; settingsBusy = false; enableSettingControls(); }
+  }
+}
+async function renderDailySummary() {
+  if (!el('dailySummaryDetails').open) return;
+  const revision = ++dailySummaryRevision;
+  const summary = await request('GET_DAILY_SUMMARY');
+  if (revision !== dailySummaryRevision || !el('dailySummaryDetails').open) return;
+  const rows = [];
+  for (const platform of ['chzzk', 'soop', 'twitch']) {
+    const value = summary.platforms[platform];
+    const name = { chzzk: '치지직', soop: 'SOOP', twitch: '트위치' }[platform];
+    const row = create('div', 'daily-summary-row');
+    const processedLabel = platform === 'twitch' ? '허브 수령' : '코드·보상 처리';
+    const pending = value.state === 'unknown' || value.state === 'login' ? '미확인' : value.pending + '개' + (value.state === 'stale' ? ' (이전 조회)' : '');
+    row.appendChild(create('p', 'setting-desc', name + ': ' + (value.earnedToday !== null ? `오늘 획득 ${value.earnedToday}개 · ` : '') +
+      `${processedLabel} ${value.processedToday === null ? '미확인' : value.processedToday + '개'} · 대기 ${pending}`));
+    const at = value.lastSuccessAt ? new Date(value.lastSuccessAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '아직 없음';
+    row.appendChild(create('p', 'setting-desc', '보관함 정상 조회: ' + at)); rows.push(row);
+  }
+  el('dailySummaryContent').replaceChildren(...rows);
+}
+function scheduleDailySummaryReset() {
+  clearTimeout(dailySummaryTimer);
+  if (!el('dailySummaryDetails').open) return;
+  const next = Date.parse(dropsDay() + 'T05:00:00+09:00') + 86400000;
+  dailySummaryTimer = setTimeout(() => {
+    void renderDailySummary().catch(error => toast(error.message, 'error'));
+    scheduleDailySummaryReset();
+  }, next - Date.now() + 1);
+}
 async function loadSettings() {
   const settings = await getSettings();
   el('settingCollectChzzk').checked = settings.autoCollectChzzk;
@@ -350,6 +433,7 @@ async function loadSettings() {
   await renderLiveStatus();
   el('settingNotify').checked = settings.enableNotifications;
   el('settingAutoClaim').checked = settings.autoClaim;
+  el('settingCollectorAlerts').checked = settings.collectorFailureAlerts;
   el('settingInterval').value = String(settings.pollingIntervalMinutes);
   enableSettingControls();
 }
@@ -400,6 +484,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       toast('치지직·트위치 자동 수집 진단을 복사했습니다.', 'success');
     } catch (error) { toast(error.message, 'error'); }
   });
+  el('exportSettingsBackup').addEventListener('click', exportSettingsBackup);
+  el('chooseSettingsBackup').addEventListener('click', () => {
+    if (settingsBusy || backupBusy || busy() || refreshing) return;
+    pendingBackup = null; el('settingsBackupFile').value = ''; updateBackupControls();
+    el('settingsBackupStatus').textContent = '';
+    el('settingsBackupFile').click();
+  });
+  el('settingsBackupFile').addEventListener('change', readSettingsBackupFile);
+  el('applySettingsBackup').addEventListener('click', applySettingsBackup);
+  el('dailySummaryDetails').addEventListener('toggle', () => {
+    scheduleDailySummaryReset();
+    void renderDailySummary().catch(error => toast(error.message, 'error'));
+  });
   el('collectorRecentDetails').addEventListener('toggle', () => {
     if (el('collectorRecentDetails').open) void renderCollectorEvents().catch(console.error);
   });
@@ -428,6 +525,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (area !== 'local') return;
     if (Object.keys(changes).some(k => k === 'dropsCache' || k === 'platformStatuses' || k === 'batchJob' || k.startsWith('handled:') || k.startsWith('hidden:'))) void loadState().catch(console.error);
     if (changes.collectorState || changes.collectorCatalog) void renderCollector().catch(console.error);
+    if (Object.keys(changes).some(k => ['dropsCache', 'platformStatuses', 'inventoryLastSuccess', 'inventoryAccounts', 'collectorState'].includes(k) || k.startsWith('handled:') || k.startsWith('hidden:'))) void renderDailySummary().catch(console.error);
     if (changes.collectorEvents && el('collectorRecentDetails').open) void renderCollectorEvents().catch(console.error);
     if (changes.liveMonitorState) void renderLiveStatus().catch(console.error);
     if (changes.settings) { void loadSettings().catch(console.error); void loadState().catch(console.error); }

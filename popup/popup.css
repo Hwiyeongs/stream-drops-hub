@@ -840,3 +840,8 @@ body {
 .reward-picker-actions .btn-claim { border-color: transparent; }
 .reward-picker-actions .btn-claim:hover { transform: none; }
 .reward-picker :is(button, input):focus-visible { outline: 2px solid var(--accent-claim); outline-offset: 3px; }
+
+.daily-summary-list { display: flex; flex-direction: column; gap: 8px; }
+.daily-summary-row .setting-desc + .setting-desc { margin-top: 2px; color: var(--text-muted); }
+.backup-status { white-space: pre-line; overflow-wrap: anywhere; }
+#applySettingsBackup { margin: 8px 0 0; width: 100%; }

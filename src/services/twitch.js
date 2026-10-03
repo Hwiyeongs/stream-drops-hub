@@ -304,6 +304,7 @@ export async function fetchTwitchDrops() {
   return {
     loggedIn: true,
     drops,
+    twitchUserId: inventory.twitchUserId,
     error: null,
   };
 }

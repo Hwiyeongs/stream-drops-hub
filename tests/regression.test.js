@@ -645,3 +645,54 @@ test('automatic Twitch claim processes earned unclaimed rewards after campaign e
   assert.deepEqual(mutations, ['instance-B']);
   assert.equal(data['handled:twitch_instance-B'].actionType, 'claimed');
 });
+test('backup and restore worker messages apply runtime settings and preserve receipt/coupon history', async () => {
+  data.settings = { autoCollectChzzk: false, autoCollectTwitch: false, collectorFailureAlerts: true };
+  data['hidden:chzzk_1'] = { id: 'chzzk_1', platform: 'chzzk', rewardName: 'Keep' };
+  data['handled:old'] = { platform: 'chzzk', couponCode: 'KEEP', receivedAt: 123 };
+  data['coupon:old'] = 'KEEP';
+  const backup = await worker.handleMessage({ type: 'EXPORT_SETTINGS_BACKUP' });
+  assert.equal(backup.settings.collectorFailureAlerts, true); assert.equal(backup.hiddenRewards.length, 1);
+  backup.settings.pollingIntervalMinutes = 5;
+  backup.hiddenRewards.push({ id: 'soop_2', platform: 'soop' });
+  const result = await worker.handleMessage({ type: 'IMPORT_SETTINGS_BACKUP', backup });
+  assert.equal(result.hiddenAdded, 1); assert.equal(result.settingsCount, 9);
+  assert.equal(alarms.get('checkDropsAlarm').periodInMinutes, 5);
+  assert.equal(data['handled:old'].couponCode, 'KEEP'); assert.equal(data['coupon:old'], 'KEEP');
+  assert.equal(data['hidden:chzzk_1'].rewardName, 'Keep');
+  await assert.rejects(worker.handleMessage({ type: 'IMPORT_SETTINGS_BACKUP', backup: { ...backup, schemaVersion: 2 } }));
+  assert.equal(data.settings.pollingIntervalMinutes, 5);
+});
+test('successful inventory timestamps and verified Twitch account feed daily summary and survive failed reads', async () => {
+  campaigns = [campaign()]; await fetchAllDrops();
+  const successfulAt = data.inventoryLastSuccess.twitch;
+  assert.ok(Number.isFinite(successfulAt)); assert.equal(data.inventoryAccounts.twitch, 'user-1');
+  let summary = await worker.handleMessage({ type: 'GET_DAILY_SUMMARY' });
+  assert.equal(summary.platforms.twitch.state, 'ok'); assert.equal(summary.platforms.twitch.pending, 1);
+  globalThis.fetch = async () => { throw Error('offline'); };
+  await fetchAllDrops();
+  summary = await worker.handleMessage({ type: 'GET_DAILY_SUMMARY' });
+  assert.equal(summary.platforms.twitch.state, 'stale'); assert.equal(summary.platforms.twitch.lastSuccessAt, successfulAt);
+  globalThis.fetch = async (url, options) => url.endsWith('/gql') ? json({ data: { currentUser: null } }) : mockFetch(url, options);
+  await fetchAllDrops();
+  assert.equal(data.inventoryAccounts.twitch, undefined);
+  summary = await worker.handleMessage({ type: 'GET_DAILY_SUMMARY' });
+  assert.equal(summary.platforms.twitch.state, 'login'); assert.equal(summary.platforms.twitch.processedToday, null);
+});
+test('collector failure alerts run after real failed collection cycles and alert storage failure cannot block recovery', async () => {
+  const { checkCollector } = await import('../src/services/auto-collector.js');
+  await checkCollector();
+  data.settings = { autoCollectChzzk: true, collectorFailureAlerts: true };
+  const originalNow = Date.now, originalSet = chrome.storage.local.set;
+  let now = Date.parse('2026-10-03T06:00:00+09:00');
+  Date.now = () => now;
+  try {
+    await checkCollector(); now += 60000; await checkCollector();
+    assert.equal(notifications.length, 0);
+    now += 60000; await checkCollector();
+    assert.equal(notifications.length, 1); assert.equal(notifications[0].id, 'collector-issue:chzzk');
+    assert.equal(data.collectorState.chzzk.phase, 'query_failed');
+    chrome.storage.local.set = async values => { if (values.collectorAlertState) throw Error('quota'); await originalSet(values); };
+    now += 60000; await checkCollector();
+    assert.equal(data.collectorState.chzzk.checkedAt, now); assert.equal(notifications.length, 1);
+  } finally { Date.now = originalNow; chrome.storage.local.set = originalSet; }
+});

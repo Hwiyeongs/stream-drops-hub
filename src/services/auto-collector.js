@@ -1,4 +1,5 @@
 import { dropsDay } from './drops-day.js';
+import { checkCollectorAlerts } from './collector-alerts.js';
 import { getSettings } from './storage.js';
 import { chzzkPlan } from './collector-plans.js';
 import { twitchPlan } from './twitch-collector-plan.js';
@@ -562,6 +563,8 @@ async function run() {
 }
 export function checkCollector(afterCurrent = false) {
   if (pending) return afterCurrent ? pending.catch(() => {}).then(() => checkCollector()) : pending;
-  pending = run().finally(() => { pending = null; });
+  pending = run().then(async () => {
+    try { await checkCollectorAlerts(); } catch { /* Alert/storage failures must not block collection. */ }
+  }).finally(() => { pending = null; });
   return pending;
 }

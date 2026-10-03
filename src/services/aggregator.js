@@ -14,6 +14,7 @@ export function isActiveDrop(drop, handled = {}, now = Date.now()) {
 }
 export async function fetchAllDrops() {
   const previous = await getCachedDrops();
+  const { inventoryLastSuccess = {}, inventoryAccounts = {} } = await chrome.storage.local.get(['inventoryLastSuccess', 'inventoryAccounts']);
   const results = await Promise.allSettled([fetchTwitchDrops(), fetchChzzkDrops(), fetchSoopDrops()]);
   const names = ['twitch', 'chzzk', 'soop'];
   const statuses = {}, drops = [];
@@ -21,6 +22,10 @@ export async function fetchAllDrops() {
     const platform = names[index];
     const value = result.status === 'fulfilled' ? result.value : { loggedIn: null, drops: [], error: result.reason?.message || '연결 오류' };
     statuses[platform] = { loggedIn: value.loggedIn, error: value.error || null, stale: !!value.error };
+    if (!value.error && value.loggedIn === true) {
+      inventoryLastSuccess[platform] = Date.now();
+      if (platform === 'twitch' && value.twitchUserId) inventoryAccounts.twitch = String(value.twitchUserId);
+    } else if (platform === 'twitch' && value.loggedIn === false) delete inventoryAccounts.twitch;
     if (value.error && value.loggedIn !== false) {
       // Keep last-known cards visible, but claims must wait for a successful refresh.
       const merged = new Map(previous.drops.filter(d => d.platform === platform).map(d => [d.id, d]));
@@ -30,6 +35,7 @@ export async function fetchAllDrops() {
       drops.push(...(value.drops || []).map(d => ({ ...d, stale: false })));
     }
   });
+  await chrome.storage.local.set({ inventoryLastSuccess, inventoryAccounts });
   const handled = await getHandledDropsLog();
   const active = drops.filter(d => isActiveDrop(d, handled));
   const cache = await saveCachedDrops(active, statuses);

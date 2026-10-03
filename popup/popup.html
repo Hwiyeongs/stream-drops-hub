@@ -112,6 +112,15 @@
 
         <section class="settings-group" aria-labelledby="diagnosticSettingsTitle">
           <h3 id="diagnosticSettingsTitle" class="settings-group-title">수집 상태 및 진단</h3>
+          <div class="setting-item">
+            <div class="setting-info"><label class="setting-title" for="settingCollectorAlerts">자동 복구 실패 알림</label><span class="setting-desc">같은 문제 3회·2분 이상 확인 시 알림 · 복구 전 중복 없음</span></div>
+            <input type="checkbox" class="toggle-switch" id="settingCollectorAlerts">
+          </div>
+          <details id="dailySummaryDetails" class="settings-disclosure">
+            <summary>오늘의 수집 요약 · 05시 기준</summary>
+            <div id="dailySummaryContent" class="daily-summary-list" aria-live="polite"></div>
+            <p class="setting-desc">이 브라우저 기록 기준 · 숨긴 보상 제외<br>획득 시간이 확인되는 치지직만 오늘 획득 수를 표시합니다.</p>
+          </details>
           <p id="collectorStatus" class="setting-desc settings-status" role="status"></p>
           <div class="settings-actions">
             <button id="copyTwitchStatus" class="collector-refresh" type="button">트위치 상태 진단 복사</button>
@@ -166,6 +175,21 @@
             <summary id="hiddenRewardsSummary">숨긴 보상 0개</summary>
             <p id="hiddenRewardsEmpty" class="setting-desc">숨긴 보상이 없습니다.</p>
             <div id="hiddenRewardsContainer" class="drops-container"></div>
+          </details>
+        </section>
+
+        <section class="settings-group" aria-labelledby="backupSettingsTitle">
+          <h3 id="backupSettingsTitle" class="settings-group-title">설정 백업·복원</h3>
+          <details id="settingsBackupDetails" class="settings-disclosure">
+            <summary>옵션과 숨김 목록 옮기기</summary>
+            <p class="setting-desc">설정·숨김 보상만 포함 · 로그인 정보·쿠폰·수령 기록 제외</p>
+            <div class="settings-actions">
+              <button id="exportSettingsBackup" class="collector-refresh" type="button">백업 파일 저장</button>
+              <button id="chooseSettingsBackup" class="collector-refresh" type="button">복원 파일 선택</button>
+            </div>
+            <input id="settingsBackupFile" type="file" accept=".json,application/json" hidden>
+            <p id="settingsBackupStatus" class="setting-desc backup-status" role="status"></p>
+            <button id="applySettingsBackup" class="collector-refresh hidden" type="button" disabled>확인한 설정 적용</button>
           </details>
         </section>
 
