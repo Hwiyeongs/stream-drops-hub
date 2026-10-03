@@ -145,7 +145,7 @@
         <section class="settings-group" aria-labelledby="liveSettingsTitle">
           <h3 id="liveSettingsTitle" class="settings-group-title">이터널리턴 방송 알림</h3>
           <div class="setting-item">
-            <div class="setting-info"><label class="setting-title" for="settingLiveMonitor">방송 감지 및 알림</label><span class="setting-desc">치지직·SOOP 드롭스 방송을 1분마다 확인</span></div>
+            <div class="setting-info"><label class="setting-title" for="settingLiveMonitor">방송 감지 및 알림</label><span class="setting-desc">치지직·SOOP 드롭스 방송을 1분마다 확인<br>같은 드롭스는 05시 리셋 전까지 한 번만 알림</span></div>
             <input type="checkbox" class="toggle-switch" id="settingLiveMonitor">
           </div>
           <div class="setting-item">
@@ -155,7 +155,7 @@
           <p id="liveMonitorStatus" class="setting-desc settings-status" role="status"></p>
           <details class="settings-disclosure">
             <summary>방송 알림 안내</summary>
-            <p class="setting-desc">브라우저가 실행 중일 때 동작합니다. 켜면 현재 방송도 확인하며, 치지직은 캠페인별, SOOP은 카테고리별 하루 한 번 알림합니다. 영상 재생은 직접 눌러야 할 수 있습니다.</p>
+            <p class="setting-desc">브라우저가 실행 중일 때 동작합니다. 켜면 현재 방송도 확인하며, 치지직은 캠페인별, SOOP은 카테고리별 한 번 알림하며 매일 05시에 리셋합니다. 같은 대상의 방송이 바뀌어도 리셋 전에는 다시 알리지 않습니다. 영상 재생은 직접 눌러야 할 수 있습니다.</p>
           </details>
         </section>
 

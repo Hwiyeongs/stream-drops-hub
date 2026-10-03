@@ -373,9 +373,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   el('hideRewardsDialog').addEventListener('cancel', event => { if (busy()) event.preventDefault(); });
   el('hideRewardsDialog').addEventListener('close', () => hideSelection.clear());
   for (const tab of document.querySelectorAll('[data-tab]')) tab.addEventListener('click', () => {
-    document.querySelectorAll('[data-tab]').forEach(t => t.classList.toggle('active', t === tab));
-    currentTab = tab.dataset.tab;
+    currentTab = tab.dataset.tab === 'settings' && currentTab === 'settings' ? 'all' : tab.dataset.tab;
+    document.querySelectorAll('[data-tab]').forEach(t => t.classList.toggle('active', t.dataset.tab === currentTab));
     el('settingsBtn').setAttribute('aria-pressed', String(currentTab === 'settings'));
+    el('settingsBtn').title = currentTab === 'settings' ? '전체로 돌아가기' : '설정';
+    el('settingsBtn').setAttribute('aria-label', el('settingsBtn').title);
     render();
   });
   el('refreshCampaigns').addEventListener('click', async () => {
