@@ -104,9 +104,9 @@ export function summarizeTwitchCampaign(detail, inventory, now = Date.now(), rec
   const earned = claimed + pending;
   const claimable = drops.some(d => !d.self?.isClaimed && required(d) > 0 && watched(d) >= required(d));
   const needsLink = detail.self?.isAccountConnected === false;
-  // A completed tier often needs claiming before Twitch advances the next one.
+  // Unclaimed earned rewards do not block progress on the remaining rewards.
   const canWatch = drops.some(d => !d.self?.isClaimed && required(d) > watched(d));
-  const watchable = !claimable && canWatch;
+  const watchable = canWatch;
   const minutes = drops.length ? drops.reduce((sum, drop) => sum + watched(drop), 0) : null;
   return { id: String(detail.id), title: String(detail.name || '트위치 이터널리턴 드롭스'), active,
     completed: drops.length > 0 && claimed === drops.length, canWatch, watchable, claimable, needsLink, minutes,

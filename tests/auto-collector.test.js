@@ -136,6 +136,46 @@ test('Twitch inventory achievement waits for claiming and distinguishes earned f
  assert.equal(c.earned,1);assert.equal(c.claimed,0);assert.equal(c.pending,1);assert.equal(c.completed,false);
 });
 
+function useThreeTwitchRewards() {
+ const fetch = globalThis.fetch;
+ globalThis.fetch = async (url, options) => {
+  const response = await fetch(url, options);
+  if (!url.includes('gql.twitch.tv')) return response;
+  const { operationName } = JSON.parse(options.body), json = await response.json();
+  const campaign = operationName === 'HubDropsDetails' ? json.data.user.dropCampaign :
+   operationName === 'Inventory' ? json.data.currentUser.inventory.dropCampaignsInProgress[0] : null;
+  if (campaign) campaign.timeBasedDrops = [60,120,180].map((minutes,i) => ({id:'reward-'+(i+1),requiredMinutesWatched:minutes,
+   self:{isClaimed:false,currentMinutesWatched:twitchMinutes,dropInstanceID:'instance-'+(i+1)}}));
+  return new Response(JSON.stringify(json));
+ };
+}
+
+test('Twitch keeps the same owned live through 60 and 120 minutes and closes it only after all three rewards are earned',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;data.settings.autoClaim=false;
+ tabs.push({id:99,windowId:1,url:'https://example.com',active:true});useThreeTwitchRewards();
+ await checkCollector();const owned=tabs.find(t=>t.id!==99),created=actions.filter(a=>a[0]==='create').length;
+ for(const [minutes,pendingCount] of [[60,1],[120,2]]){
+  twitchMinutes=minutes;await checkCollector();
+  assert.equal(data.collectorState.twitch.phase,'playing');assert.equal(data.collectorState.twitch.tabId,owned.id);
+  assert.equal(data.collectorState.twitch.campaigns[0].pending,pendingCount);assert.equal(data.collectorState.twitch.campaigns[0].claimed,0);
+  assert.equal(tabs.length,2);assert.equal(actions.some(a=>a[0]==='remove'),false);
+  assert.equal(actions.filter(a=>a[0]==='create').length,created);
+ }
+ twitchMinutes=180;await checkCollector();
+ assert.deepEqual(tabs.map(t=>t.id),[99]);assert.equal(data.collectorState.twitch.phase,'waiting_claim');
+ assert.equal(data.collectorState.twitch.campaigns[0].earned,3);assert.equal(data.collectorState.twitch.campaigns[0].pending,3);
+ assert.equal(data.collectorState.twitch.campaigns[0].claimed,0);assert.equal(data.settings.autoClaim,false);
+});
+
+test('Twitch resumes a previous first-reward claim wait without requiring a manual claim or toggle',async()=>{
+ data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;data.settings.autoClaim=false;
+ data.collectorState={day:new Date(Date.now()+4*3600000).toISOString().slice(0,10),twitch:{phase:'waiting_claim',campaignId:'er'}};
+ twitchMinutes=60;useThreeTwitchRewards();await checkCollector();
+ assert.equal(tabs.length,1);assert.equal(data.collectorState.twitch.phase,'playing');
+ assert.equal(data.collectorState.twitch.campaigns[0].pending,1);assert.equal(data.collectorState.twitch.campaigns[0].total,3);
+ assert.equal(data.settings.autoClaim,false);assert.equal(data.collectorState.twitch.userStopped,undefined);
+});
+
 test('Twitch legacy composite receipt stops a redundant owned live without changing its original dates', async () => {
  data.settings.autoCollectChzzk=false;data.settings.autoCollectTwitch=true;
  tabs.push({id:99,windowId:1,url:'https://example.com',active:true});

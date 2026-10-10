@@ -107,13 +107,31 @@ test('opens only a temporary official inventory tab to acquire Twitch page heade
   } finally { chrome.tabs.create = create; }
 });
 
-test('claimable tier waits for claim instead of reporting watch completion', async () => {
+test('a campaign with every watch requirement met waits for claim without pretending it was claimed', async () => {
   pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress[0].timeBasedDrops[0].self.currentMinutesWatched = 60;
   const plan = await twitchPlan();
   assert.equal(plan.needsClaim, true);
   assert.equal(plan.finished, false);
   assert.equal(plan.candidates.length, 0);
   assert.equal(summarizeTwitchCampaign(detail(), null).completed, false);
+});
+
+test('pending first and second rewards do not block watching the remaining campaign rewards', async () => {
+  const tiers = [60, 120, 180].map((minutes, i) => ({ id: 'reward-' + (i + 1), requiredMinutesWatched: minutes,
+    self: { currentMinutesWatched: 60, isClaimed: false, dropInstanceID: 'instance-' + (i + 1) } }));
+  pages.HubDropsDetails.user.dropCampaign.timeBasedDrops = tiers.map(d => ({ ...d, self: null }));
+  pages.HubDropsInventory.currentUser.inventory.dropCampaignsInProgress[0].timeBasedDrops = tiers;
+  let plan = await twitchPlan();
+  assert.equal(plan.campaigns[0].pending, 1); assert.equal(plan.campaigns[0].claimed, 0);
+  assert.equal(plan.needsClaim, true); assert.equal(plan.candidates.length, 1);
+  assert.equal(plan.campaigns[0].watchable, true); assert.equal(plan.finished, false);
+  tiers.forEach(d => { d.self.currentMinutesWatched = 120; });
+  plan = await twitchPlan();
+  assert.equal(plan.campaigns[0].pending, 2); assert.equal(plan.candidates.length, 1);
+  tiers.forEach(d => { d.self.currentMinutesWatched = 180; });
+  plan = await twitchPlan();
+  assert.equal(plan.campaigns[0].pending, 3); assert.equal(plan.campaigns[0].claimed, 0);
+  assert.equal(plan.candidates.length, 0); assert.equal(plan.needsClaim, true); assert.equal(plan.finished, false);
 });
 
 test('a recent aggregate benefit award does not prove the campaign tier was claimed', async () => {
