@@ -186,7 +186,7 @@ function acquisitionTime(drop) {
   }
   const observed = drop.acquisitionSource === 'observed';
   const options = { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
-  const time = create('time', 'drop-acquired', (observed ? '획득 약 ' : '획득 ') + date.toLocaleTimeString('ko-KR', options));
+  const time = create('time', 'drop-acquired', '획득 ' + date.toLocaleTimeString('ko-KR', options));
   time.dateTime = date.toISOString();
   time.title = (observed ? '시청 조건 달성을 확인한 시각: ' : '획득 시각: ') +
     date.toLocaleString('ko-KR', { ...options, year: 'numeric', month: '2-digit', day: '2-digit' }) + ' (한국시간)';
