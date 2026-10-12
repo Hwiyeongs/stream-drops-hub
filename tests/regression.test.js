@@ -555,9 +555,11 @@ test('hiding and restoring survive refresh and upgrades without changing handled
 });
 
 test('a hidden reward keeps only display metadata and can be restored even after leaving the server inventory',async()=>{
- await storage.hideDrop({...coupon('hidden'),secret:'PRIVATE',couponCode:'PRIVATE-CODE',twitchUserId:'PRIVATE-USER'});
+ const acquiredAt=Date.parse('2026-10-12T06:32:58+09:00');
+ await storage.hideDrop({...coupon('hidden'),acquiredAt,acquisitionSource:'observed',secret:'PRIVATE',couponCode:'PRIVATE-CODE',twitchUserId:'PRIVATE-USER'});
  const entry=(await storage.getHiddenDrops()).hidden;
  assert.equal(/PRIVATE/.test(JSON.stringify(entry)),false);
+ assert.equal(entry.acquiredAt,acquiredAt);assert.equal(entry.acquisitionSource,'observed');
  await worker.handleMessage({type:'RESTORE_DROP',id:'hidden'});
  assert.deepEqual(await storage.getHiddenDrops(),{});assert.equal(data.dropsCache,undefined);
  await assert.rejects(worker.handleMessage({type:'HIDE_DROP',id:'unknown'}),/現在|현재/);

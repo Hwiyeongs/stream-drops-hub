@@ -173,6 +173,25 @@ function renderAlerts() {
 function safeUrl(value) {
   try { const url = new URL(value); return url.protocol === 'https:' ? url.href : null; } catch { return null; }
 }
+function acquisitionTime(drop) {
+  const value = drop.acquiredAt;
+  // A calendar date alone does not prove that a reward was earned at midnight.
+  const hasTime = typeof value === 'number' || (typeof value === 'string' && /[T\s]\d{1,2}:\d{2}/.test(value));
+  const timestamp = hasTime ? parseTimestamp(value) : null;
+  const date = timestamp !== null && timestamp > 0 ? new Date(timestamp) : null;
+  if (!date || !Number.isFinite(date.getTime())) {
+    const unknown = create('span', 'drop-acquired', '시간 미상');
+    unknown.title = '획득 시각을 확인할 수 없습니다.';
+    return unknown;
+  }
+  const observed = drop.acquisitionSource === 'observed';
+  const options = { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
+  const time = create('time', 'drop-acquired', (observed ? '획득 약 ' : '획득 ') + date.toLocaleTimeString('ko-KR', options));
+  time.dateTime = date.toISOString();
+  time.title = (observed ? '시청 조건 달성을 확인한 시각: ' : '획득 시각: ') +
+    date.toLocaleString('ko-KR', { ...options, year: 'numeric', month: '2-digit', day: '2-digit' }) + ' (한국시간)';
+  return time;
+}
 function card(drop, history, hidden = false) {
   const node = create('div', history || hidden ? 'drop-card log-card' : 'drop-card claimable');
   const imageUrl = safeUrl(drop.rewardImageUrl);
@@ -186,6 +205,7 @@ function card(drop, history, hidden = false) {
   const platform = ['chzzk', 'twitch'].includes(drop.platform) ? drop.platform : 'unknown';
   title.appendChild(create('span', `platform-pill pill-${platform}`, drop.platformName || platform));
   const name = create('span', 'drop-name', drop.rewardName); name.title = drop.rewardName; title.appendChild(name);
+  title.appendChild(acquisitionTime(drop));
   sub.appendChild(create('span', 'drop-game', drop.gameTitle || drop.campaignName));
   if (history) sub.appendChild(create('span', 'action-badge', ({ copied: '코드 복사됨', saved: '코드 보관됨', claimed: '수령 완료' })[drop.actionType] || '기록됨'));
   if (drop.stale && !history) sub.appendChild(create('span', 'action-badge', '최신 조회 필요'));

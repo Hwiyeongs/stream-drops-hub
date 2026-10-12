@@ -392,6 +392,14 @@ body {
   min-width: 0;
 }
 
+.drop-acquired {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .drop-sub-row {
   display: flex;
   align-items: center;

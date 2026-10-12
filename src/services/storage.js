@@ -123,7 +123,7 @@ export async function hideDrop(drop) {
   // Keep a minimal display snapshot for restoring even when the server removes it.
   const entry = { id: drop.id, platform: drop.platform, hiddenAt: Date.now() };
   for (const field of ['platformName', 'rewardName', 'rewardImageUrl', 'gameTitle', 'campaignName', 'campaignUrl',
-    'acquiredAt', 'recentDate', 'campaignDate', 'gameCategoryId', 'gameSlug', 'officialGameName']) {
+    'acquiredAt', 'acquisitionSource', 'recentDate', 'campaignDate', 'gameCategoryId', 'gameSlug', 'officialGameName']) {
     if (drop[field] != null) entry[field] = drop[field];
   }
   await chrome.storage.local.set({ [HIDDEN + drop.id]: entry });
