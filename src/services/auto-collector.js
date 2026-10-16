@@ -426,13 +426,13 @@ async function run() {
       const { campaign, live } = target;
       if (!validLiveUrl(live.url)) throw new Error('대상 방송 주소가 올바르지 않습니다.');
       let tab = await ownedTab(session);
-      const patterns = platform === 'chzzk' ? ['https://chzzk.naver.com/live/*'] : ['https://www.twitch.tv/*', 'https://twitch.tv/*'];
-      const others = (await chrome.tabs.query({ url: patterns })).filter(t => t.id !== tab?.id &&
-        (platform !== 'twitch' || sameLiveUrl(t.pendingUrl || t.url, t.pendingUrl || t.url)));
+      // CHZZK collection owns a separate muted tab, even while the user watches
+      // another CHZZK stream. Keep Twitch's existing concurrent-viewing guard.
+      const others = platform === 'twitch' ? (await chrome.tabs.query({ url: ['https://www.twitch.tv/*', 'https://twitch.tv/*'] }))
+        .filter(t => t.id !== tab?.id && sameLiveUrl(t.pendingUrl || t.url, t.pendingUrl || t.url)) : [];
       if (others.length) {
         await release(session); delete session.tabId; delete session.url;
         session.phase = 'waiting_other_tab';
-        if (platform === 'chzzk') resetChzzkObservation(session);
         session.status = '다른 방송 탭을 닫아 주세요 · 중복 시청으로 적립이 멈출 수 있어 대기 중';
         await persist(state); continue;
       }

@@ -9,12 +9,13 @@ globalThis.chrome={
  storage:{local:{async get(k){return k==null?structuredClone(data):Object.fromEntries((Array.isArray(k)?k:[k]).map(x=>[x,structuredClone(data[x])]));},async set(v){Object.assign(data,structuredClone(v));}}},
  alarms:{async get(){return null;},async create(n,v){data.alarm=v;},async clear(){delete data.alarm;}},
  tabs:{async get(id){const t=tabs.find(t=>t.id===id);if(!t)throw Error('closed');return t;},async query({url,active,windowId}){return tabs.filter(t=>(!url||(Array.isArray(url)?url:[url]).some(p=>t.url.startsWith(p.split('*')[0])))&&(active===undefined||t.active===active)&&(windowId===undefined||t.windowId===windowId));},async create(v){const t={id:Math.max(0,...tabs.map(t=>t.id))+1,windowId:1,...v};tabs.push(t);actions.push(['create',v]);return t;},async update(id,v){const t=tabs.find(t=>t.id===id);if(v.active)tabs.filter(x=>x.windowId===t.windowId).forEach(x=>x.active=false);Object.assign(t,v);if('muted' in v)t.mutedInfo={muted:v.muted,reason:'extension'};if(v.active&&t.discarded){t.discarded=false;t.status='complete';}actions.push(['update',v]);return t;},async remove(id){tabs=tabs.filter(t=>t.id!==id);actions.push(['remove',id]);}},
- scripting:{async executeScript(){actions.push(['play',video]);return [{result:{state:video}}];}},runtime:{getURL:p=>p},notifications:{async create(){}},
+ scripting:{async executeScript({target}){actions.push(['play',video,target.tabId]);return [{result:{state:video}}];}},runtime:{getURL:p=>p},notifications:{async create(){}},
 };
 chrome.storage.session={async get(){return {twitchGqlHeaders:{at:Date.now(),headers:{Authorization:'OAuth test','Client-Integrity':'test'}}};},async remove(){}};
 chrome.cookies={async get(){return {value:'test'};},async getAll(){return [];}};
 const {checkCollector,ensureCollectorAlarm,chooseTarget}=await import('../src/services/auto-collector.js');
 const {campaignProgress}=await import('../src/services/collector-plans.js');
+const {checkLiveMonitor}=await import('../src/services/live-monitor.js');
 beforeEach(()=>{
  data={settings:{autoCollectChzzk:true,autoCollectSoop:false,chzzkCollectCampaign:'auto'}};tabs=[];actions=[];details=[detail(1),detail(2)];lives=[live(1,1),live(2,1),live(3,2)];claims=[];challenges=[];missions=[];soopLives=[];twitchLives=[{node:{id:'stream',viewersCount:10,broadcaster:{login:'streamer'}}}];twitchClaimed=false;twitchAwards=[];twitchMinutes=12;error=false;video='playing';beforeFetch=null;
  globalThis.fetch=async (url,options)=>{
@@ -86,7 +87,72 @@ test('paused CHZZK collection does not show old progress as current after a fail
  assert.match(data.collectorState.chzzk.status,/조회\/처리 실패/);
  assert.ok(data.collectorState.chzzk.error);
 });
-test('other platform live tabs block concurrent viewing',async()=>{tabs=[{id:9,url:'https://chzzk.naver.com/live/'+channel(8)}];await checkCollector();assert.equal(actions.length,0);assert.match(data.collectorState.chzzk.status,/다른 방송 탭/);});
+test('CHZZK collection opens a separate muted tab while an ordinary CHZZK broadcast is already playing',async()=>{
+ const viewer={id:9,windowId:1,url:'https://chzzk.naver.com/live/'+channel(8),active:true,mutedInfo:{muted:false}};
+ tabs=[structuredClone(viewer)];await checkCollector();
+ const owned=tabs.find(tab=>tab.id!==viewer.id);
+ assert.equal(tabs.length,2);assert.equal(data.collectorState.chzzk.phase,'playing');
+ assert.equal(data.collectorState.chzzk.tabId,owned.id);assert.equal(owned.mutedInfo.muted,true);assert.equal(owned.active,false);
+ assert.deepEqual(tabs.find(tab=>tab.id===viewer.id),viewer);
+ assert.ok(actions.filter(action=>action[0]==='play').every(action=>action[2]===owned.id));
+ assert.equal(actions.some(action=>action[0]==='remove'),false);
+});
+
+test('opening another CHZZK broadcast keeps the collector tab and its server progress observation',async()=>{
+ challenges=[{rewardNo:10,accumWatchMinutes:12}];await checkCollector();const id=data.collectorState.chzzk.tabId;
+ const viewer={id:99,windowId:1,url:'https://chzzk.naver.com/live/'+channel(8),active:true,mutedInfo:{muted:false}};
+ tabs.forEach(tab=>tab.active=false);tabs.push(structuredClone(viewer));actions=[];
+ challenges=[{rewardNo:10,accumWatchMinutes:15}];await checkCollector();
+ assert.equal(data.collectorState.chzzk.tabId,id);assert.equal(data.collectorState.chzzk.phase,'playing');
+ assert.equal(data.collectorState.chzzk.lastProgress,15);assert.deepEqual(tabs.find(tab=>tab.id===99),viewer);
+ assert.equal(actions.some(action=>action[0]==='remove'||action[0]==='create'||action[0]==='update'&&action[1].url),false);
+ assert.ok(actions.filter(action=>action[0]==='play').every(action=>action[2]===id));
+});
+
+test('CHZZK collection owns a distinct tab even if the user is watching the same drops channel',async()=>{
+ const viewer={id:9,windowId:1,url:'https://chzzk.naver.com/live/'+channel(1),active:true,mutedInfo:{muted:false}};
+ tabs=[structuredClone(viewer)];await checkCollector();const id=data.collectorState.chzzk.tabId;
+ assert.notEqual(id,9);assert.equal(tabs.length,2);assert.equal(tabs.find(tab=>tab.id===id).url,viewer.url);
+ data.settings.autoCollectChzzk=false;await checkCollector();assert.deepEqual(tabs,[viewer]);
+});
+
+test('CHZZK stream switching and completion affect only the collector while the user keeps watching',async()=>{
+ const viewer={id:9,windowId:1,url:'https://chzzk.naver.com/live/'+channel(8),active:true,mutedInfo:{muted:false}};
+ tabs=[structuredClone(viewer)];await checkCollector();const id=data.collectorState.chzzk.tabId;
+ lives=[live(2,1),live(3,2)];await checkCollector();
+ assert.equal(data.collectorState.chzzk.tabId,id);assert.equal(tabs.find(tab=>tab.id===id).url,'https://chzzk.naver.com/live/'+channel(2));
+ assert.deepEqual(tabs.find(tab=>tab.id===9),viewer);
+ claims=[{rewardNo:10},{rewardNo:20}];await checkCollector();assert.deepEqual(tabs,[viewer]);
+ assert.equal(data.collectorState.chzzk.phase,'complete');
+});
+
+test('a previous CHZZK other-tab wait resumes automatically while the user broadcast remains open',async()=>{
+ data.collectorState={day:new Date(Date.now()+4*3600000).toISOString().slice(0,10),chzzk:{phase:'waiting_other_tab'}};
+ const viewer={id:9,windowId:1,url:'https://chzzk.naver.com/live/'+channel(8),active:true};
+ tabs=[structuredClone(viewer)];await checkCollector();
+ assert.equal(tabs.length,2);assert.equal(data.collectorState.chzzk.phase,'playing');
+ assert.equal(data.collectorState.chzzk.userStopped,undefined);assert.deepEqual(tabs.find(tab=>tab.id===9),viewer);
+});
+
+test('closing the CHZZK collector manually still pauses it without taking over another CHZZK tab',async()=>{
+ const viewer={id:9,windowId:1,url:'https://chzzk.naver.com/live/'+channel(8),active:true};
+ tabs=[structuredClone(viewer)];await checkCollector();const id=data.collectorState.chzzk.tabId;
+ tabs=tabs.filter(tab=>tab.id!==id);actions=[];await checkCollector();
+ assert.equal(data.collectorState.chzzk.userStopped,true);assert.equal(data.collectorState.chzzk.phase,'paused');
+ assert.deepEqual(tabs,[viewer]);assert.equal(actions.some(action=>['create','update','remove','play'].includes(action[0])),false);
+});
+
+test('a CHZZK drops notification is followed by independent collection despite an existing user broadcast',async()=>{
+ data.settings.liveMonitorEnabled=true;data.settings.liveAutoOpen=true;
+ const viewer={id:9,windowId:1,url:'https://chzzk.naver.com/live/'+channel(8),active:true};
+ tabs=[structuredClone(viewer)];const notify=chrome.notifications.create,messages=[];
+ try {
+  chrome.notifications.create=async(id,notice)=>messages.push({id,...notice});
+  await checkLiveMonitor();assert.equal(messages.length,1);assert.deepEqual(tabs,[viewer]);
+  await checkCollector();assert.equal(tabs.length,2);assert.equal(data.collectorState.chzzk.phase,'playing');
+  assert.deepEqual(tabs.find(tab=>tab.id===9),viewer);
+ }finally{chrome.notifications.create=notify;}
+});
 test('disable during fetch prevents opening',async()=>{beforeFetch=async()=>{data.settings.autoCollectChzzk=false;};await checkCollector();assert.equal(tabs.length,0);});
 test('server progress is displayed separately from successful playback',async()=>{await checkCollector();challenges=[{rewardNo:10,accumWatchMinutes:12}];await checkCollector();assert.match(data.collectorState.chzzk.status,/서버 시청 12분/);assert.match(data.collectorState.chzzk.status,/재생 중/);});
 test('autoplay denial remains retryable without tab thrashing',async()=>{await checkCollector();video='blocked';await checkCollector();await checkCollector();assert.equal(actions.filter(a=>a[0]==='create').length,1);assert.match(data.collectorState.chzzk.status,/재시도/);});
