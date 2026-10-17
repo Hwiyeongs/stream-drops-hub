@@ -66,6 +66,25 @@ test('another active campaign can play while every live in the current campaign 
  assert.equal(chooseTarget({candidates:[current]},session,'1',now),null);
 });
 test('API failure preserves current tab and never declares complete',async()=>{await checkCollector();error=true;await checkCollector();assert.equal(tabs.length,1);assert.match(data.collectorState.chzzk.status,/실패/);});
+test('new campaigns are discovered and published after the previous campaign completes without manual refresh',async()=>{
+ details=[detail(1)];lives=[live(1,1)];await checkCollector();claims=[{rewardNo:10}];await checkCollector();
+ assert.equal(data.collectorState.chzzk.phase,'complete');details.push(detail(2));lives.push(live(2,2));await checkCollector();
+ assert.equal(data.collectorState.chzzk.campaignId,'2');assert.equal(data.collectorState.chzzk.phase,'playing');
+ assert.deepEqual(data.collectorCatalog.map(c=>c.id),['1','2']);
+});
+test('a broken campaign detail does not prevent collection of another valid campaign',async()=>{
+ const fetch=globalThis.fetch;globalThis.fetch=async(url,options)=>url.endsWith('/drops/campaigns/1')?new Response('{}',{status:404}):fetch(url,options);
+ await checkCollector();assert.equal(data.collectorState.chzzk.campaignId,'2');assert.equal(data.collectorState.chzzk.phase,'playing');
+ assert.match(data.collectorState.chzzk.status,/일부 캠페인/);assert.equal(tabs.length,1);
+});
+test('unverified remaining campaigns preserve the owned tab instead of falsely declaring complete',async()=>{
+ await checkCollector();const id=data.collectorState.chzzk.tabId;claims=[{rewardNo:10}];
+ const fetch=globalThis.fetch;globalThis.fetch=async(url,options)=>url.endsWith('/drops/campaigns/2')?new Response('{}',{status:404}):fetch(url,options);
+ actions=[];await checkCollector();assert.equal(data.collectorState.chzzk.phase,'query_failed');
+ assert.equal(tabs[0].id,id);assert.equal(actions.some(action=>action[0]==='remove'),false);
+ globalThis.fetch=fetch;await checkCollector();assert.equal(data.collectorState.chzzk.phase,'playing');
+ assert.equal(data.collectorState.chzzk.tabId,id);assert.equal(data.collectorState.chzzk.campaignId,'2');
+});
 test('turning off removes only owned tab',async()=>{await checkCollector();tabs.push({id:9,url:'https://example.com'});data.settings.autoCollectChzzk=false;await checkCollector();assert.deepEqual(tabs.map(t=>t.id),[9]);});
 test('user closed or navigated tab pauses without reopening',async()=>{await checkCollector();tabs[0].url='https://example.com';await checkCollector();assert.equal(tabs.length,1);assert.equal(data.collectorState.chzzk.userStopped,true);data.settings.autoCollectChzzk=false;await checkCollector();assert.equal(tabs.length,1);});
 test('paused CHZZK collection refreshes claims received on another computer without restarting playback',async()=>{

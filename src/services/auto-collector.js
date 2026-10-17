@@ -389,6 +389,7 @@ async function run() {
       if (platform === 'twitch') { session.claimedToday = plan.claimedToday; session.twitchUserId = plan.twitchUserId; }
       session.campaignsCheckedAt = Date.now();
       session.error = null;
+      session.catalogRetrying = !!plan.retrying;
       delete session.queryReason;
       if (plan.catalog) session.catalog = plan.catalog;
       settings = await getSettings();
@@ -397,7 +398,7 @@ async function run() {
       if (session.userStopped) {
         session.phase = 'paused';
         if (platform === 'chzzk') resetChzzkObservation(session);
-        session.status = plan.campaigns.length && plan.campaigns.every(c => c.completed) ? '대상 캠페인 수령 완료 · 자동 시청 일시 중지됨' :
+        session.status = !plan.retrying && plan.campaigns.length && plan.campaigns.every(c => c.completed) ? '대상 캠페인 수령 완료 · 자동 시청 일시 중지됨' :
           '탭을 닫거나 이동하여 자동 시청 일시 중지됨 · 토글을 껐다 켜면 재개';
         session.checkedAt = Date.now(); await persist(state); continue;
       }
@@ -414,6 +415,7 @@ async function run() {
       }
       const target = chooseTarget(plan, session, selected);
       if (!target) {
+        if (platform === 'chzzk' && plan.retrying) throw new Error('일부 치지직 캠페인 조회 실패 · 다음 확인에서 다시 시도합니다.');
         await release(session); delete session.tabId; delete session.url;
         session.phase = platform === 'twitch' && plan.needsClaim ? 'waiting_claim' :
           plan.campaigns.length && plan.campaigns.every(c => c.completed) ? 'complete' : 'waiting_live';
@@ -514,6 +516,7 @@ async function run() {
           if (platform !== 'chzzk') session.progressAt = Date.now();
         }
         if (campaign.minutes !== null) session.status += ` · 서버 시청 ${campaign.minutes}분 (${campaign.earned}/${campaign.total}개 달성)`;
+        if (platform === 'chzzk' && plan.retrying) session.status += ' · 일부 캠페인 확인 실패 · 자동 재시도';
         if (platform === 'twitch' && campaign.needsLink) session.status += ' · 게임 계정 연결 권장';
         if (platform === 'chzzk') {
           const now = Date.now();

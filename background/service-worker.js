@@ -129,7 +129,7 @@ export async function handleMessage(message) {
   switch (message.type) {
     case 'GET_COLLECTOR_CATALOG': {
       const catalog = await fetchCampaignCatalog();
-      await chrome.storage.local.set({ collectorCatalog: catalog });
+      if ((await getSettings()).autoCollectChzzk) runCollector(true);
       return catalog;
     }
     case 'GET_STATE': return { ...await getCachedDrops(), settings: await getSettings() };

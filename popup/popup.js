@@ -17,8 +17,10 @@ async function renderLiveStatus() {
   }).join('\n');
 }
 async function renderCollector() {
-  const [{ collectorState = {}, collectorCatalog = [] }, settings] = await Promise.all([chrome.storage.local.get(['collectorState', 'collectorCatalog']), getSettings()]);
-  const list = collectorCatalog.length ? collectorCatalog : collectorState.chzzk?.catalog || [];
+  const [{ collectorState = {}, collectorCatalog = [], collectorCatalogCheckedAt, collectorCatalogPartial }, settings] = await Promise.all([chrome.storage.local.get(['collectorState', 'collectorCatalog', 'collectorCatalogCheckedAt', 'collectorCatalogPartial']), getSettings()]);
+  const list = Number.isFinite(collectorCatalogCheckedAt) ? collectorCatalog : collectorState.chzzk?.catalog || collectorCatalog;
+  el('refreshCampaigns').title = Number.isFinite(collectorCatalogCheckedAt) ?
+    '목록 확인 ' + new Date(collectorCatalogCheckedAt).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit' }) + (collectorCatalogPartial ? ' · 일부 조회 재시도 중' : '') : '캠페인 목록 새로고침';
   const select = el('settingCollectCampaign');
   const options = [new Option('모든 캠페인 순차 수집', 'auto'), ...list.map(c => new Option(c.title, c.id))];
   if (settings.chzzkCollectCampaign !== 'auto' && !list.some(c => c.id === settings.chzzkCollectCampaign)) options.push(new Option('선택한 캠페인 #' + settings.chzzkCollectCampaign + ' (현재 목록 없음)', settings.chzzkCollectCampaign));
@@ -41,6 +43,18 @@ async function renderCollector() {
 function enableSettingControls() {
   settingIds.map(el).forEach(c => { c.disabled = settingsBusy; });
   el('settingLiveAutoOpen').disabled = settingsBusy || !el('settingLiveMonitor').checked;
+}
+let catalogRefreshPending;
+function refreshCatalog(force = false) {
+  if (catalogRefreshPending) return catalogRefreshPending;
+  catalogRefreshPending = (async () => {
+    const { collectorCatalogCheckedAt: at, collectorCatalogPartial } = await chrome.storage.local.get(['collectorCatalogCheckedAt', 'collectorCatalogPartial']);
+    if (!force && !collectorCatalogPartial && Number.isFinite(at) && at <= Date.now() && Date.now() - at < 60000) return;
+    el('refreshCampaigns').disabled = true;
+    try { await request('GET_COLLECTOR_CATALOG'); await renderCollector(); }
+    finally { el('refreshCampaigns').disabled = false; }
+  })().finally(() => { catalogRefreshPending = null; });
+  return catalogRefreshPending;
 }
 let currentTab = 'all', drops = [], log = {}, hiddenDrops = {}, statuses = {}, batchJob = null;
 const hideSelection = new Set();
@@ -438,11 +452,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     el('settingsBtn').title = currentTab === 'settings' ? '전체로 돌아가기' : '설정';
     el('settingsBtn').setAttribute('aria-label', el('settingsBtn').title);
     render();
+    if (currentTab === 'settings') void refreshCatalog().catch(error => toast(error.message, 'error'));
   });
   el('refreshCampaigns').addEventListener('click', async () => {
-    el('refreshCampaigns').disabled = true;
-    try { await request('GET_COLLECTOR_CATALOG'); await renderCollector(); } catch (error) { toast(error.message, 'error'); }
-    finally { el('refreshCampaigns').disabled = false; }
+    try { await refreshCatalog(true); } catch (error) { toast(error.message, 'error'); }
   });
   el('refreshBtn').addEventListener('click', refresh);
   el('copyTwitchStatus').addEventListener('click', async () => {
@@ -490,7 +503,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (Object.keys(changes).some(k => k === 'dropsCache' || k === 'platformStatuses' || k === 'batchJob' || k.startsWith('handled:') || k.startsWith('hidden:'))) void loadState().catch(console.error);
-    if (changes.collectorState || changes.collectorCatalog) void renderCollector().catch(console.error);
+    if (changes.collectorState || changes.collectorCatalog || changes.collectorCatalogCheckedAt || changes.collectorCatalogPartial) void renderCollector().catch(console.error);
     if (Object.keys(changes).some(k => ['dropsCache', 'platformStatuses', 'inventoryLastSuccess', 'inventoryAccounts', 'collectorState'].includes(k) || k.startsWith('handled:') || k.startsWith('hidden:') || k.startsWith('earned:twitch:'))) void renderDailySummary().catch(console.error);
     if (changes.collectorEvents && el('collectorRecentDetails').open) void renderCollectorEvents().catch(console.error);
     if (changes.liveMonitorState) void renderLiveStatus().catch(console.error);
