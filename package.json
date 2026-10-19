@@ -1,9 +1,9 @@
 {
   "name": "stream-drops-hub-fixed",
   "private": true,
-  "version": "1.5.43",
+  "version": "1.5.44",
   "type": "module",
   "scripts": {
-    "test": "node tests/regression.test.js && node tests/live-monitor.test.js && node tests/auto-collector.test.js && node tests/twitch-collector.test.js && node tests/collector-diagnostics.test.js && node tests/collector-alerts.test.js && node tests/daily-summary.test.js && node tests/reward-acquisition.test.js && node tests/chzzk-catalog.test.js"
+    "test": "node tests/regression.test.js && node tests/live-monitor.test.js && node tests/auto-collector.test.js && node tests/twitch-collector.test.js && node tests/collector-diagnostics.test.js && node tests/collector-alerts.test.js && node tests/daily-summary.test.js && node tests/reward-acquisition.test.js && node tests/chzzk-catalog.test.js && node tests/reward-progress.test.js"
   }
 }

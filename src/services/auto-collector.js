@@ -383,9 +383,14 @@ async function run() {
       const plan = platform === 'chzzk' ? await chzzkPlan(selected) :
         await twitchPlan(Date.now(), session.liveKey?.startsWith('twitch:') ? session.liveKey.slice(7) : null);
       delete session.account;
+      const previousProgress = session.progressCampaigns || session.campaigns || [];
+      const progressCheckedAt = Date.now();
       session.campaigns = plan.campaigns.map(c => ({ id:c.id, title:c.title, completed:c.completed, active:c.active,
         minutes:c.minutes, earned:c.earned, claimed:c.claimed, pending:c.pending, total:c.total,
-        claimedToday:c.claimedToday, endAt:c.endAt }));
+        claimedToday:c.claimedToday, endAt:c.endAt, rewards:c.rewards, progressCheckedAt }));
+      // Display-only snapshots retain failed campaigns without making them watch targets.
+      session.progressCampaigns = [...session.campaigns, ...(plan.retrying ? previousProgress
+        .filter(c => !session.campaigns.some(fresh => fresh.id === c.id)).map(c => ({ ...c, progressStale: true })) : [])];
       if (platform === 'twitch') { session.claimedToday = plan.claimedToday; session.twitchUserId = plan.twitchUserId; }
       session.campaignsCheckedAt = Date.now();
       session.error = null;

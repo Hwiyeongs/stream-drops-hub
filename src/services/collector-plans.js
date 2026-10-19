@@ -1,6 +1,7 @@
 import { fetchWithTimeout } from './fetch-helper.js';
 import { parseTimestamp } from './storage.js';
 import { CHZZK_CATEGORY, fetchChzzkEternalLives } from './live-monitor.js';
+import { rewardProgress } from './reward-progress.js';
 
 const headers = { Accept: 'application/json', 'Front-Client-Product-Type': 'GAME', 'Front-Client-Platform-Type': 'PC' };
 async function read(url, authenticated = false) {
@@ -67,8 +68,16 @@ export function campaignProgress(detail, claims, challenges, now = Date.now()) {
       .map(Number).filter(value => Number.isFinite(value) && value >= 0);
     return [String(reward.rewardNo), values.length ? Math.max(...values) : null];
   }));
+  const displayRewards = rewards.map((reward, index) => {
+    const claim = claims.find(item => String(item.rewardNo) === String(reward.rewardNo));
+    return rewardProgress({ id: reward.rewardNo, name: reward.rewardName || `보상 ${index + 1}`,
+      current: progressByReward[String(reward.rewardNo)], required: reward.conditionForMinutes,
+      earned: !!claim, claimed: !!claim && (['REQUESTED', 'COMPLETED'].includes(claim.fulfillmentState) ||
+        claim.isClaimed === true || !!(claim.code || claim.couponCode || claim.rewardCode)),
+      exhausted: reward.codeRemainingCount != null && String(reward.codeRemainingCount).trim() !== '' && Number(reward.codeRemainingCount) === 0 });
+  });
   return { completed, active, watchable, minutes, earned: rewards.filter(r => earned.has(String(r.rewardNo))).length, total: rewards.length,
-    progressByReward, rewardIds: rewards.map(r => String(r.rewardNo)), endAt: end, startDate: detail.startDate };
+    rewards: displayRewards, progressByReward, rewardIds: rewards.map(r => String(r.rewardNo)), endAt: end, startDate: detail.startDate };
 }
 export async function chzzkPlan(selected = 'auto') {
   const [discovery, claimsJson, progressJson] = await Promise.all([

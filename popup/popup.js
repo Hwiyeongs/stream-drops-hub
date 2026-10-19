@@ -4,6 +4,8 @@ import { request, fetchAllDrops, claimUnifiedDrop, saveSettings, recordHandledDr
 import { getCachedDrops, getHandledDropsLog, getSettings, getHiddenDrops, parseExpTimestamp, parseDropClaimExpiry, parseTimestamp, isRecentDate } from '../src/services/storage.js';
 import { isRewardVisible } from '../src/services/reward-visibility.js';
 import { getCollectorEvents, REASON_LABELS } from '../src/services/collector-diagnostics.js';
+import { collectionProgressRows } from '../src/services/reward-progress.js';
+import { renderCollectionProgress, setProgressTab } from './collection-progress.js';
 
 const el = id => document.getElementById(id);
 let settingsBusy = true;
@@ -43,6 +45,13 @@ async function renderCollector() {
 function enableSettingControls() {
   settingIds.map(el).forEach(c => { c.disabled = settingsBusy; });
   el('settingLiveAutoOpen').disabled = settingsBusy || !el('settingLiveMonitor').checked;
+}
+let progressRenderRevision = 0;
+async function renderProgressPanel() {
+  const revision = ++progressRenderRevision;
+  const [{ collectorState = {} }, settings] = await Promise.all([chrome.storage.local.get('collectorState'), getSettings()]);
+  if (revision !== progressRenderRevision) return;
+  renderCollectionProgress(el('collectionProgress'), collectionProgressRows(collectorState, settings), currentTab);
 }
 let catalogRefreshPending;
 function refreshCatalog(force = false) {
@@ -142,6 +151,7 @@ function datedCards(items, history) {
     return nodes;
 }
 function render() {
+  setProgressTab(el('collectionProgress'), currentTab);
   el('rewardMenuBtn').classList.toggle('hidden', ['log', 'settings'].includes(currentTab));
   el('rewardMenuBtn').disabled = busy() || refreshing || !filteredDrops().length;
   for (const [id, platform] of [['badgeAll', null], ['badgeChzzk', 'chzzk'], ['badgeSoop', 'soop'], ['badgeTwitch', 'twitch']]) {
@@ -417,6 +427,7 @@ async function loadSettings() {
   el('settingCollectChzzk').checked = settings.autoCollectChzzk;
   el('settingCollectTwitch').checked = settings.autoCollectTwitch;
   await renderCollector();
+  await renderProgressPanel();
   el('settingLiveMonitor').checked = settings.liveMonitorEnabled;
   el('settingLiveAutoOpen').checked = settings.liveAutoOpen;
   await renderLiveStatus();
@@ -504,6 +515,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (area !== 'local') return;
     if (Object.keys(changes).some(k => k === 'dropsCache' || k === 'platformStatuses' || k === 'batchJob' || k.startsWith('handled:') || k.startsWith('hidden:'))) void loadState().catch(console.error);
     if (changes.collectorState || changes.collectorCatalog || changes.collectorCatalogCheckedAt || changes.collectorCatalogPartial) void renderCollector().catch(console.error);
+    if (changes.collectorState) void renderProgressPanel().catch(console.error);
     if (Object.keys(changes).some(k => ['dropsCache', 'platformStatuses', 'inventoryLastSuccess', 'inventoryAccounts', 'collectorState'].includes(k) || k.startsWith('handled:') || k.startsWith('hidden:') || k.startsWith('earned:twitch:'))) void renderDailySummary().catch(console.error);
     if (changes.collectorEvents && el('collectorRecentDetails').open) void renderCollectorEvents().catch(console.error);
     if (changes.liveMonitorState) void renderLiveStatus().catch(console.error);
@@ -517,6 +529,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   } catch (error) { toast(error.message, 'error'); }
   finally { settingsBusy = false; enableSettingControls(); }
   if (initialized) {
+    setInterval(() => { void renderProgressPanel().catch(console.error); }, 30000);
     try { await refresh(); } catch (error) { toast(error.message, 'error'); }
   }
 });

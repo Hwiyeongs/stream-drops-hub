@@ -2,6 +2,7 @@ import { fetchWithTimeout } from './fetch-helper.js';
 import { getHandledDropsLog, linkTwitchReceipt } from './storage.js';
 import { fetchTwitchInventory } from './twitch.js';
 import { dropsDay } from './drops-day.js';
+import { progressMinutes, rewardProgress } from './reward-progress.js';
 import { buildCapturedTwitchRequestHeaders, clearCapturedTwitchGqlHeaders, getCapturedTwitchGqlHeaders, waitForCapturedTwitchGqlHeaders } from './twitch-headers.js';
 
 const GQL_URL = 'https://gql.twitch.tv/gql';
@@ -94,7 +95,8 @@ export function summarizeTwitchCampaign(detail, inventory, now = Date.now(), rec
     if (receipt && receivedToday(receipt, now)) claimedToday++;
     const isClaimed = drop.self?.isClaimed === true || inventorySelf?.isClaimed === true || !!receipt;
     const currentMinutesWatched = Math.max(watched(drop), watched({ self: inventorySelf }));
-    return { ...drop, self: { ...drop.self, ...inventorySelf,
+    const knownMinutes = [drop.self?.currentMinutesWatched, inventorySelf?.currentMinutesWatched].map(progressMinutes).filter(value => value !== null);
+    return { ...drop, displayMinutes: knownMinutes.length ? Math.max(...knownMinutes) : null, self: { ...drop.self, ...inventorySelf,
       isClaimed, currentMinutesWatched } };
   });
   const startAt = Date.parse(detail.startAt), endAt = Date.parse(detail.endAt);
@@ -108,8 +110,11 @@ export function summarizeTwitchCampaign(detail, inventory, now = Date.now(), rec
   const canWatch = drops.some(d => !d.self?.isClaimed && required(d) > watched(d));
   const watchable = canWatch;
   const minutes = drops.length ? drops.reduce((sum, drop) => sum + watched(drop), 0) : null;
+  const rewards = drops.map((drop, index) => rewardProgress({ id: drop.id, name: drop.name || `보상 ${index + 1}`,
+    current: drop.displayMinutes, required: drop.requiredMinutesWatched, claimed: drop.self.isClaimed,
+    earned: drop.displayMinutes !== null && required(drop) > 0 && drop.displayMinutes >= required(drop) }));
   return { id: String(detail.id), title: String(detail.name || '트위치 이터널리턴 드롭스'), active,
-    completed: drops.length > 0 && claimed === drops.length, canWatch, watchable, claimable, needsLink, minutes,
+    completed: drops.length > 0 && claimed === drops.length, canWatch, watchable, claimable, needsLink, minutes, rewards,
     earned, claimed, pending, total: drops.length, claimedToday, endAt, game: detail.game,
     restricted: detail.allow?.isEnabled === true || (detail.allow?.isEnabled !== false && (detail.allow?.channels?.length || 0) > 0),
     allowed: detail.allow?.channels || [], lives: [] };

@@ -66,6 +66,24 @@ test('another active campaign can play while every live in the current campaign 
  assert.equal(chooseTarget({candidates:[current]},session,'1',now),null);
 });
 test('API failure preserves current tab and never declares complete',async()=>{await checkCollector();error=true;await checkCollector();assert.equal(tabs.length,1);assert.match(data.collectorState.chzzk.status,/실패/);});
+test('reward progress snapshots retain server values on query errors and refresh after recovery',async()=>{
+ challenges=[{rewardNo:10,accumWatchMinutes:45}];await checkCollector();
+ let snapshot=data.collectorState.chzzk.progressCampaigns.find(c=>c.id==='1');
+ assert.equal(snapshot.rewards[0].percent,75);const at=snapshot.progressCheckedAt;
+ error=true;await checkCollector();snapshot=data.collectorState.chzzk.progressCampaigns.find(c=>c.id==='1');
+ assert.equal(snapshot.rewards[0].percent,75);assert.equal(snapshot.progressCheckedAt,at);
+ error=false;challenges=[{rewardNo:10,accumWatchMinutes:54}];await checkCollector();
+ assert.equal(data.collectorState.chzzk.progressCampaigns.find(c=>c.id==='1').rewards[0].percent,90);
+});
+test('partial campaign errors keep display progress without turning failed snapshots into watch targets',async()=>{
+ challenges=[{rewardNo:10,accumWatchMinutes:45},{rewardNo:20,accumWatchMinutes:30}];await checkCollector();
+ const fetch=globalThis.fetch;globalThis.fetch=async(url,options)=>url.endsWith('/drops/campaigns/1')?new Response('{}',{status:404}):fetch(url,options);
+ await checkCollector();const session=data.collectorState.chzzk;
+ assert.equal(session.campaignId,'2');assert.equal(session.campaigns.some(c=>c.id==='1'),false);
+ const previous=session.progressCampaigns.find(c=>c.id==='1');assert.equal(previous.progressStale,true);assert.equal(previous.rewards[0].percent,75);
+ globalThis.fetch=fetch;await checkCollector();
+ assert.equal(data.collectorState.chzzk.progressCampaigns.find(c=>c.id==='1').progressStale,undefined);
+});
 test('new campaigns are discovered and published after the previous campaign completes without manual refresh',async()=>{
  details=[detail(1)];lives=[live(1,1)];await checkCollector();claims=[{rewardNo:10}];await checkCollector();
  assert.equal(data.collectorState.chzzk.phase,'complete');details.push(detail(2));lives.push(live(2,2));await checkCollector();
