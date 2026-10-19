@@ -222,10 +222,9 @@ body {
 
 /* Compact server-side collection progress */
 .progress-toggle { width: auto; padding: 0 7px; font-size: 11px; white-space: nowrap; }
-.icon-btn.progress-toggle { background: #1e40af; color: #eff6ff; border-color: #60a5fa; font-weight: 700; }
-.icon-btn.progress-toggle:hover { background: #1d4ed8; color: #fff; border-color: #93c5fd; }
-.icon-btn.progress-toggle.active { background: #1e3a8a; color: #fff; border-color: #93c5fd; }
-.icon-btn.progress-toggle:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
+.icon-btn.progress-toggle { background: linear-gradient(135deg, var(--accent-claim), #059669); color: #fff; border-color: transparent; font-weight: 700; box-shadow: 0 1px 5px var(--accent-claim-glow); }
+.icon-btn.progress-toggle:hover { filter: brightness(1.1); }
+.icon-btn.progress-toggle:focus-visible { outline: 2px solid #6ee7b7; outline-offset: 2px; }
 .progress-dialog { position: fixed; inset: 108px 12px auto; margin: 0 auto; width: calc(100% - 24px); max-width: 416px; max-height: calc(100vh - 124px); padding: 0; color: var(--text-primary); background: var(--bg-main); border: 1px solid var(--border-highlight); border-radius: var(--radius-md); color-scheme: dark; }
 .progress-dialog[open] { display: flex; flex-direction: column; }
 .progress-dialog::backdrop { background: rgba(0, 0, 0, .6); }
