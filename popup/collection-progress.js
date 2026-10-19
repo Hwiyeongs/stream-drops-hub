@@ -51,6 +51,7 @@ export function renderCollectionProgress(container, rows) {
       if (!campaign.rewards.length) section.append(node('p', 'collection-progress-note', '보상별 진행 확인 대기'));
       campaign.rewards.forEach((reward, index) => {
         const item = node('div', 'collection-reward');
+        item.dataset.state = reward.state;
         const name = node('span', 'collection-reward-name', `${index + 1}. ${reward.name}`); name.title = reward.name;
         const label = progressLabel(reward);
         const value = node('span', 'collection-reward-value', label + (reward.state === 'watching' ? ' · ' + reward.percent + '%' : ''));
