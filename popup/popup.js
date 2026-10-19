@@ -164,9 +164,6 @@ function render() {
   el('logListView').classList.toggle('hidden', currentTab !== 'log');
   el('settingsView').classList.toggle('hidden', currentTab !== 'settings');
   const items = filteredDrops();
-  el('claimAllBtn').classList.toggle('hidden', ['log', 'settings'].includes(currentTab) || items.length < 2);
-  el('claimAllBtn').disabled = busy() || refreshing || !items.some(d => !d.stale);
-  el('claimAllBtn').textContent = batchJob?.status === 'running' ? `처리 중 (${batchJob.remaining.length}개 남음)` : `전체 수령 (${items.filter(d => !d.stale).length})`;
   el('refreshBtn').disabled = refreshing || busy();
   el('refreshIcon').classList.toggle('rotating', refreshing);
   renderAlerts();
@@ -508,13 +505,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   el('collectorRecentDetails').addEventListener('toggle', () => {
     if (el('collectorRecentDetails').open) void renderCollectorEvents().catch(console.error);
-  });
-  el('claimAllBtn').addEventListener('click', async () => {
-    if (busy()) return;
-    claiming = true; render();
-    try { batchJob = await request('CLAIM_ALL', { ids: filteredDrops().filter(d => !d.stale).map(d => d.id) }); }
-    catch (error) { toast(error.message, 'error'); }
-    finally { claiming = false; await loadState(); }
   });
   for (const id of settingIds) el(id).addEventListener('change', async () => {
     const value = id === 'settingInterval' ? Number(el(id).value) : id === 'settingCollectCampaign' ? el(id).value : el(id).checked;
