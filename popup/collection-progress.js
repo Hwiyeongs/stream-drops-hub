@@ -19,15 +19,7 @@ function meter(percent, label) {
 function checkedLabel(at) {
   return at ? new Date(at).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false }) : '';
 }
-export function setProgressTab(container, tab) {
-  let visible = false;
-  for (const details of container.children) {
-    const show = tab === 'all' || tab === details.dataset.platform;
-    details.classList.toggle('hidden', !show); visible ||= show;
-  }
-  container.classList.toggle('hidden', !visible);
-}
-export function renderCollectionProgress(container, rows, tab = 'all') {
+export function renderCollectionProgress(container, rows) {
   const keep = new Set(rows.map(row => row.platform));
   for (const details of [...container.children]) if (!keep.has(details.dataset.platform)) details.remove();
   for (const row of rows) {
@@ -68,5 +60,5 @@ export function renderCollectionProgress(container, rows, tab = 'all') {
     });
     body.replaceChildren(...sections, node('p', 'collection-progress-note', '서버 기준 · 약 1분마다 갱신 · 100%는 시청 조건 달성'));
   }
-  setProgressTab(container, tab);
+  container.classList.toggle('hidden', !rows.length);
 }

@@ -5,7 +5,7 @@ import { getCachedDrops, getHandledDropsLog, getSettings, getHiddenDrops, parseE
 import { isRewardVisible } from '../src/services/reward-visibility.js';
 import { getCollectorEvents, REASON_LABELS } from '../src/services/collector-diagnostics.js';
 import { collectionProgressRows } from '../src/services/reward-progress.js';
-import { renderCollectionProgress, setProgressTab } from './collection-progress.js';
+import { renderCollectionProgress } from './collection-progress.js';
 
 const el = id => document.getElementById(id);
 let settingsBusy = true;
@@ -51,7 +51,9 @@ async function renderProgressPanel() {
   const revision = ++progressRenderRevision;
   const [{ collectorState = {} }, settings] = await Promise.all([chrome.storage.local.get('collectorState'), getSettings()]);
   if (revision !== progressRenderRevision) return;
-  renderCollectionProgress(el('collectionProgress'), collectionProgressRows(collectorState, settings), currentTab);
+  const rows = collectionProgressRows(collectorState, settings);
+  renderCollectionProgress(el('collectionProgress'), rows);
+  el('collectionProgressEmpty').classList.toggle('hidden', rows.length > 0);
 }
 let catalogRefreshPending;
 function refreshCatalog(force = false) {
@@ -151,7 +153,6 @@ function datedCards(items, history) {
     return nodes;
 }
 function render() {
-  setProgressTab(el('collectionProgress'), currentTab);
   el('rewardMenuBtn').classList.toggle('hidden', ['log', 'settings'].includes(currentTab));
   el('rewardMenuBtn').disabled = busy() || refreshing || !filteredDrops().length;
   for (const [id, platform] of [['badgeAll', null], ['badgeChzzk', 'chzzk'], ['badgeSoop', 'soop'], ['badgeTwitch', 'twitch']]) {
@@ -441,6 +442,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   const settingControls = settingIds.map(el);
   settingControls.forEach(control => { control.disabled = true; });
   el('versionTag').textContent = 'v' + chrome.runtime.getManifest().version;
+  const progressDialog = el('collectionProgressDialog');
+  el('collectionProgressBtn').addEventListener('click', () => {
+    if (progressDialog.open) { progressDialog.close(); return; }
+    progressDialog.showModal();
+    el('collectionProgressBtn').setAttribute('aria-expanded', 'true');
+    el('collectionProgressBtn').classList.add('active');
+    void renderProgressPanel().catch(error => toast(error.message, 'error'));
+  });
+  el('collectionProgressClose').addEventListener('click', () => progressDialog.close());
+  progressDialog.addEventListener('close', () => {
+    el('collectionProgressBtn').setAttribute('aria-expanded', 'false');
+    el('collectionProgressBtn').classList.remove('active');
+  });
+  progressDialog.addEventListener('click', event => {
+    if (event.target !== progressDialog) return;
+    const bounds = progressDialog.getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) progressDialog.close();
+  });
   el('rewardMenuBtn').addEventListener('click', () => {
     if (busy() || refreshing) return;
     hideSelection.clear(); el('hideRewardsError').classList.add('hidden'); renderHidePicker(); el('hideRewardsDialog').showModal();
@@ -529,7 +548,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   } catch (error) { toast(error.message, 'error'); }
   finally { settingsBusy = false; enableSettingControls(); }
   if (initialized) {
-    setInterval(() => { void renderProgressPanel().catch(console.error); }, 30000);
+    setInterval(() => { if (progressDialog.open) void renderProgressPanel().catch(console.error); }, 30000);
     try { await refresh(); } catch (error) { toast(error.message, 'error'); }
   }
 });

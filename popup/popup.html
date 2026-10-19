@@ -27,6 +27,7 @@
       </div>
       <div class="header-actions">
         <button id="claimAllBtn" class="btn-claim-all hidden" title="현재 목록의 모든 보상 수령">전체 수령</button>
+        <button id="collectionProgressBtn" class="icon-btn progress-toggle" type="button" title="드롭스 진행률" aria-haspopup="dialog" aria-controls="collectionProgressDialog" aria-expanded="false">진행률</button>
         <button id="refreshBtn" class="icon-btn" title="새로고침">
           <svg id="refreshIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
@@ -58,7 +59,6 @@
     <main class="content">
       <!-- Drops List View -->
       <div id="dropsListView" class="view-panel active">
-        <div id="collectionProgress" class="collection-progress-container hidden" aria-label="자동 수집 진행 상황"></div>
         <div id="dropsContainer" class="drops-container">
           <!-- Drops cards injected dynamically -->
         </div>
@@ -202,6 +202,16 @@
     <div id="toastContainer" class="toast-container"></div>
   </div>
 
+  <dialog id="collectionProgressDialog" class="progress-dialog" aria-labelledby="collectionProgressTitle">
+    <div class="progress-dialog-header">
+      <h2 id="collectionProgressTitle">드롭스 진행률</h2>
+      <button id="collectionProgressClose" class="icon-btn" type="button" aria-label="진행률 닫기" title="닫기">✕</button>
+    </div>
+    <div class="progress-dialog-body">
+      <div id="collectionProgress" class="collection-progress-container hidden" aria-label="자동 수집 진행 상황"></div>
+      <p id="collectionProgressEmpty" class="setting-desc hidden">자동 수집이 꺼져 있어요.<br>설정에서 치지직 또는 트위치 자동 수집을 켜주세요.</p>
+    </div>
+  </dialog>
   <dialog id="hideRewardsDialog" class="reward-picker" aria-labelledby="hideRewardsTitle" aria-describedby="hideRewardsHint">
     <h2 id="hideRewardsTitle">숨길 보상 선택</h2>
     <p id="hideRewardsHint" class="setting-desc">선택한 보상은 목록·알림·자동 수령에서 제외합니다.</p>

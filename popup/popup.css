@@ -66,12 +66,14 @@ body {
 }
 
 .brand {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
 .logo-icon {
+  flex-shrink: 0;
   width: 30px;
   height: 30px;
   border-radius: var(--radius-sm);
@@ -84,11 +86,15 @@ body {
 }
 
 .brand-text {
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
 
 .title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.3px;
@@ -103,6 +109,7 @@ body {
 }
 
 .header-actions {
+  flex-shrink: 0;
   display: flex;
   gap: 6px;
 }
@@ -214,6 +221,16 @@ body {
 .dot-log { background-color: #3b82f6; box-shadow: 0 0 5px #3b82f6; }
 
 /* Compact server-side collection progress */
+.progress-toggle { width: auto; padding: 0 7px; font-size: 11px; white-space: nowrap; }
+.progress-dialog { margin: auto; width: calc(100% - 24px); max-width: 416px; max-height: calc(100vh - 32px); padding: 0; color: var(--text-primary); background: var(--bg-main); border: 1px solid var(--border-highlight); border-radius: var(--radius-md); color-scheme: dark; }
+.progress-dialog[open] { display: flex; flex-direction: column; }
+.progress-dialog::backdrop { background: rgba(0, 0, 0, .6); }
+.progress-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px 9px 12px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
+.progress-dialog-header h2 { font-size: 13px; font-weight: 600; }
+.progress-dialog-header .icon-btn { width: 26px; height: 26px; }
+.progress-dialog-body { overflow-y: auto; min-height: 0; padding: 10px; }
+.progress-dialog-body .collection-progress-container { margin-bottom: 0; }
+.progress-dialog-body > .setting-desc { padding: 8px 2px; }
 .collection-progress-container { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-bottom: 10px; }
 .collection-progress { min-width: 0; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-card); --progress-color: var(--color-chzzk); }
 .collection-progress[data-platform="twitch"] { --progress-color: var(--color-twitch); }
