@@ -244,7 +244,8 @@ body {
 .collection-progress-heading::before { content: '›'; color: var(--text-muted); }
 .collection-progress[open] .collection-progress-heading::before { transform: rotate(90deg); }
 .collection-platform { flex-shrink: 0; color: var(--progress-text); font-weight: 700; }
-.collection-campaign { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.collection-campaign-heading { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; }
+.collection-campaign { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 .collection-percent { flex-shrink: 0; padding: 1px 5px; border-radius: 4px; color: var(--progress-text); background: var(--progress-badge); font-weight: 700; font-variant-numeric: tabular-nums; }
 .collection-meter { height: 6px; margin-top: 6px; border-radius: 3px; background: var(--bg-subtle); overflow: hidden; }
 .collection-meter-fill { display: block; height: 100%; background: var(--progress-color); border-radius: inherit; }
@@ -255,9 +256,8 @@ body {
 .previous-progress > summary > .collection-progress-note { color: #fcd34d; }
 .collection-progress-rewards { padding: 0 10px 8px; border-top: 1px solid var(--border-color); }
 .collection-rewards-heading { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
-.collection-rewards-title { flex: 1; min-width: 0; color: var(--text-secondary); font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collection-rewards-title { flex: 0 1 auto; min-width: 0; color: var(--text-secondary); font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .collection-campaign-source { flex-shrink: 0; padding: 1px 4px; border-radius: 3px; font-size: 9px; color: var(--progress-text); background: var(--progress-badge); }
-.collection-progress-source { color: var(--progress-text); }
 .collection-reward { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; margin-top: 6px; font-size: 11px; }
 .collection-reward-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .collection-reward-value { padding: 0 4px; border-radius: 3px; color: var(--progress-text); background: var(--progress-badge); font-size: 10px; font-variant-numeric: tabular-nums; }

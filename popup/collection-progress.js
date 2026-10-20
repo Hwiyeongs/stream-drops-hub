@@ -36,11 +36,13 @@ export function renderCollectionProgress(container, rows) {
     const heading = node('div', 'collection-progress-heading');
     heading.append(node('span', 'collection-platform', row.name));
     const title = node('span', 'collection-campaign', row.title); title.title = row.title;
-    heading.append(title, node('span', 'collection-percent', row.percent === null ? '확인 대기' : (row.next ? '다음 ' : '') + row.percent + '%'));
+    const campaignHeading = node('span', 'collection-campaign-heading');
+    campaignHeading.append(title);
+    if (row.sourceLabel) campaignHeading.append(node('span', 'collection-campaign-source', row.sourceLabel));
+    heading.append(campaignHeading, node('span', 'collection-percent', row.percent === null ? '확인 대기' : (row.next ? '다음 ' : '') + row.percent + '%'));
     const caption = node('div', 'collection-progress-caption');
     caption.append(node('span', '', row.label), node('span', '', row.total ? `보상 ${row.earned}/${row.total}개 달성` : '서버 진행 확인 중'));
     const summaryNodes = [heading, meter(row.percent, row.name + ' 다음 보상 진행률'), caption];
-    if (row.sourceLabel) summaryNodes.push(node('div', 'collection-progress-note collection-progress-source', row.sourceLabel));
     const notes = [row.status, row.stale ? '이전 조회 기준' : '', row.partial ? '일부 조회 재시도 중' : ''].filter(Boolean);
     if (notes.length) summaryNodes.push(node('div', 'collection-progress-note', notes.join(' · ') + (row.checkedAt ? ' · ' + checkedLabel(row.checkedAt) : '')));
     summary.replaceChildren(...summaryNodes);
