@@ -9,8 +9,8 @@ const now = Date.parse('2026-10-19T07:30:00+09:00');
 const settings = { autoCollectChzzk: true, autoCollectTwitch: false, chzzkCollectCampaign: 'auto' };
 const campaign = extra => ({ id: '1', title: '테스트 캠페인', active: true, progressCheckedAt: now,
   rewards: [progress({})], ...extra });
-const rows = (extra = {}, config = settings, at = now) => collectionProgressRows({ chzzk: { campaignsCheckedAt: now,
-  campaigns: [campaign({})], ...extra } }, config, at);
+const rows = (extra = {}, config = settings, at = now, tabs = []) => collectionProgressRows({ chzzk: { campaignsCheckedAt: now,
+  campaigns: [campaign({})], ...extra } }, config, at, tabs);
 test('progress uses the server minutes and the individual threshold', () => {
   assert.equal(progress({}).percent, 75); assert.equal(progressLabel(progress({})), '45/60분');
 });
@@ -134,4 +134,74 @@ test('legacy snapshots wait for per-reward data instead of treating aggregate mi
 });
 test('manually paused collection can display freshly fetched server progress', () => {
   const [row] = rows({ userStopped: true }); assert.equal(row.status, '일시 중지'); assert.equal(row.stale, false); assert.equal(row.percent, 75);
+});
+const channelA = 'a'.repeat(32), channelB = 'b'.repeat(32);
+const manualCampaigns = () => [
+  campaign({ id: '1', title: '루미아 마스터 클래스', liveChannelIds: [channelA], rewards: [progress({ current: 15 })] }),
+  campaign({ id: '2', title: '로드 투 마스터즈', liveChannelIds: [channelB] })
+];
+const openRoad = extra => ({ id: 9, active: true, url: 'https://chzzk.naver.com/live/' + channelB, ...extra });
+test('a manually opened Road stream is shown ahead of the different automatic Lumia target', () => {
+  const [row] = rows({ campaignId: '1', tabId: 7, phase: 'playing', campaigns: manualCampaigns() }, settings, now, [openRoad()]);
+  assert.equal(row.title, '로드 투 마스터즈'); assert.equal(row.percent, 75); assert.equal(row.sourceLabel, '열린 방송');
+  assert.equal(row.campaigns[0].id, '2'); assert.equal(row.campaigns[1].sourceLabel, '자동 수집 대상');
+  assert.equal(row.campaigns[1].rewards[0].percent, 25);
+});
+test('an owned collection tab does not count as an independently opened broadcast', () => {
+  const [row] = rows({ campaignId: '2', tabId: 9, phase: 'playing', campaigns: manualCampaigns() }, settings, now, [openRoad()]);
+  assert.equal(row.title, '로드 투 마스터즈'); assert.equal(row.sourceLabel, '자동 수집 대상'); assert.equal(row.campaigns[0].opened, false);
+});
+test('manual tabs in the same campaign identify both sources without opening another collector', () => {
+  const [row] = rows({ campaignId: '2', tabId: 7, phase: 'playing', campaigns: manualCampaigns() }, settings, now, [openRoad()]);
+  assert.equal(row.sourceLabel, '열린 방송 · 자동 수집 대상');
+});
+test('normal viewing with no matching Drops channel does not replace the automatic target', () => {
+  const [row] = rows({ campaignId: '1', tabId: 7, phase: 'playing', campaigns: manualCampaigns() }, settings, now,
+    [openRoad({ url: 'https://chzzk.naver.com/live/' + 'c'.repeat(32) })]);
+  assert.equal(row.title, '루미아 마스터 클래스'); assert.equal(row.sourceLabel, '자동 수집 대상');
+});
+test('the active separately opened stream has priority among multiple matched campaigns', () => {
+  const [row] = rows({ campaignId: '1', tabId: 7, phase: 'playing', campaigns: manualCampaigns() }, settings, now,
+    [openRoad({ id: 8, active: false, url: 'https://chzzk.naver.com/live/' + channelA }), openRoad()]);
+  assert.equal(row.campaignId, '2'); assert.equal(row.campaigns[0].activeOpened, true);
+});
+test('discarded tabs cannot stand in for currently opened broadcasts', () => {
+  const [row] = rows({ campaignId: '1', tabId: 7, phase: 'playing', campaigns: manualCampaigns() }, settings, now, [openRoad({ discarded: true })]);
+  assert.equal(row.campaignId, '1');
+});
+test('query strings on a genuine CHZZK broadcast still identify the server-matched campaign', () => {
+  const [row] = rows({ campaigns: manualCampaigns() }, settings, now, [openRoad({ url: 'https://chzzk.naver.com/live/' + channelB + '?ref=fixture#player' })]);
+  assert.equal(row.campaignId, '2'); assert.equal(row.sourceLabel, '열린 방송');
+});
+test('lookalike hosts, credentials and non-HTTPS addresses never identify a manual campaign', () => {
+  for (const url of ['https://chzzk.naver.com.example/live/', 'https://user@chzzk.naver.com/live/', 'http://chzzk.naver.com/live/', 'https://chzzk.naver.com:8443/live/']) {
+    const [row] = rows({ campaignId: '1', campaigns: manualCampaigns() }, settings, now, [openRoad({ url: url + channelB })]);
+    assert.equal(row.campaignId, '1'); assert.equal(row.campaigns.some(c => c.opened), false);
+  }
+});
+test('pending navigation away from a campaign is not matched using the old tab URL', () => {
+  const [row] = rows({ campaignId: '1', campaigns: manualCampaigns() }, settings, now, [openRoad({ pendingUrl: 'https://example.test/' })]);
+  assert.equal(row.campaignId, '1');
+});
+test('a user-navigated collector tab can be displayed as another opened broadcast after ownership is paused', () => {
+  const [row] = rows({ campaignId: '1', tabId: 9, phase: 'paused', userStopped: true, campaigns: manualCampaigns() }, settings, now, [openRoad()]);
+  assert.equal(row.campaignId, '2'); assert.equal(row.sourceLabel, '열린 방송'); assert.equal(row.status, '자동 수집 일시 중지');
+});
+test('a still-owned target stays representative at 100 percent until the collector really switches', () => {
+  const campaigns = manualCampaigns(); campaigns[0].rewards = [progress({ earned: true })];
+  const [row] = rows({ campaignId: '1', tabId: 7, phase: 'playing', campaigns });
+  assert.equal(row.campaignId, '1'); assert.equal(row.percent, 100); assert.equal(row.sourceLabel, '자동 수집 대상');
+});
+test('a missing current snapshot uses the known target title and unknown progress, never another campaigns percentage', () => {
+  const [row] = rows({ campaignId: '99', title: '로드 투 마스터즈', tabId: 7, phase: 'query_failed', campaigns: manualCampaigns() });
+  assert.equal(row.title, '로드 투 마스터즈'); assert.equal(row.percent, null); assert.equal(row.stale, true);
+});
+test('fixed campaign selection still excludes a different manually opened campaign', () => {
+  const [row] = rows({ campaignId: '1', tabId: 7, phase: 'playing', campaigns: manualCampaigns() },
+    { ...settings, chzzkCollectCampaign: '1' }, now, [openRoad()]);
+  assert.equal(row.campaignId, '1'); assert.equal(row.campaigns.length, 1);
+});
+test('legacy numeric campaign IDs match the target identity', () => {
+  const [row] = rows({ campaignId: 2, tabId: 7, phase: 'playing', campaigns: manualCampaigns() });
+  assert.equal(row.campaignId, '2'); assert.equal(row.title, '로드 투 마스터즈');
 });

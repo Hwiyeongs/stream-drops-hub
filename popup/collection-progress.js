@@ -30,6 +30,7 @@ export function renderCollectionProgress(container, rows) {
       container.append(details);
     }
     details.classList.toggle('previous-progress', row.stale);
+    details.dataset.campaignId = row.campaignId ?? '';
     const summary = details.querySelector('summary');
     summary.setAttribute('aria-label', `${row.name} ${row.title} ${row.percent === null ? '확인 대기' : '다음 보상 ' + row.percent + '%'} · 보상별 진행률 펼치기`);
     const heading = node('div', 'collection-progress-heading');
@@ -39,13 +40,18 @@ export function renderCollectionProgress(container, rows) {
     const caption = node('div', 'collection-progress-caption');
     caption.append(node('span', '', row.label), node('span', '', row.total ? `보상 ${row.earned}/${row.total}개 달성` : '서버 진행 확인 중'));
     const summaryNodes = [heading, meter(row.percent, row.name + ' 다음 보상 진행률'), caption];
+    if (row.sourceLabel) summaryNodes.push(node('div', 'collection-progress-note collection-progress-source', row.sourceLabel));
     const notes = [row.status, row.stale ? '이전 조회 기준' : '', row.partial ? '일부 조회 재시도 중' : ''].filter(Boolean);
     if (notes.length) summaryNodes.push(node('div', 'collection-progress-note', notes.join(' · ') + (row.checkedAt ? ' · ' + checkedLabel(row.checkedAt) : '')));
     summary.replaceChildren(...summaryNodes);
     const body = details.querySelector('.collection-progress-rewards');
     const sections = row.campaigns.map(campaign => {
       const section = node('section', 'collection-campaign-rewards');
-      const heading = node('div', 'collection-rewards-title', campaign.title); heading.title = campaign.title;
+      section.dataset.campaignId = campaign.id;
+      const heading = node('div', 'collection-rewards-heading');
+      const title = node('span', 'collection-rewards-title', campaign.title); title.title = campaign.title;
+      heading.append(title);
+      if (campaign.sourceLabel) heading.append(node('span', 'collection-campaign-source', campaign.sourceLabel));
       section.append(heading);
       if (campaign.stale) section.append(node('div', 'collection-progress-note', '이전 조회 기준' + (campaign.checkedAt ? ' · ' + checkedLabel(campaign.checkedAt) : '')));
       if (!campaign.rewards.length) section.append(node('p', 'collection-progress-note', '보상별 진행 확인 대기'));

@@ -75,6 +75,12 @@ test('reward progress snapshots retain server values on query errors and refresh
  error=false;challenges=[{rewardNo:10,accumWatchMinutes:54}];await checkCollector();
  assert.equal(data.collectorState.chzzk.progressCampaigns.find(c=>c.id==='1').rewards[0].percent,90);
 });
+test('progress snapshots retain server-matched live channels without persisting complete broadcast records',async()=>{
+ await checkCollector();const session=data.collectorState.chzzk;
+ assert.deepEqual(session.campaigns.find(c=>c.id==='1').liveChannelIds,[channel(1),channel(2)]);
+ assert.deepEqual(session.progressCampaigns.find(c=>c.id==='2').liveChannelIds,[channel(3)]);
+ assert.equal('lives' in session.campaigns[0],false);assert.equal(tabs.length,1);
+});
 test('partial campaign errors keep display progress without turning failed snapshots into watch targets',async()=>{
  challenges=[{rewardNo:10,accumWatchMinutes:45},{rewardNo:20,accumWatchMinutes:30}];await checkCollector();
  const fetch=globalThis.fetch;globalThis.fetch=async(url,options)=>url.endsWith('/drops/campaigns/1')?new Response('{}',{status:404}):fetch(url,options);

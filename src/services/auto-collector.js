@@ -387,7 +387,8 @@ async function run() {
       const progressCheckedAt = Date.now();
       session.campaigns = plan.campaigns.map(c => ({ id:c.id, title:c.title, completed:c.completed, active:c.active,
         minutes:c.minutes, earned:c.earned, claimed:c.claimed, pending:c.pending, total:c.total,
-        claimedToday:c.claimedToday, endAt:c.endAt, rewards:c.rewards, progressCheckedAt }));
+        claimedToday:c.claimedToday, endAt:c.endAt, rewards:c.rewards, progressCheckedAt,
+        liveChannelIds: platform === 'chzzk' ? [...new Set(c.lives.map(live => live.channelId))] : undefined }));
       // Display-only snapshots retain failed campaigns without making them watch targets.
       session.progressCampaigns = [...session.campaigns, ...(plan.retrying ? previousProgress
         .filter(c => !session.campaigns.some(fresh => fresh.id === c.id)).map(c => ({ ...c, progressStale: true })) : [])];

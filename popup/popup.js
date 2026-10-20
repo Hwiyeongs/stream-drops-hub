@@ -50,8 +50,9 @@ let progressRenderRevision = 0;
 async function renderProgressPanel() {
   const revision = ++progressRenderRevision;
   const [{ collectorState = {} }, settings] = await Promise.all([chrome.storage.local.get('collectorState'), getSettings()]);
+  const openTabs = settings.autoCollectChzzk && chrome.tabs?.query ? await chrome.tabs.query({ url: 'https://chzzk.naver.com/live/*' }).catch(() => []) : [];
   if (revision !== progressRenderRevision) return;
-  const rows = collectionProgressRows(collectorState, settings);
+  const rows = collectionProgressRows(collectorState, settings, Date.now(), openTabs);
   renderCollectionProgress(el('collectionProgress'), rows);
   el('collectionProgressEmpty').classList.toggle('hidden', rows.length > 0);
 }
